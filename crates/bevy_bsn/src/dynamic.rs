@@ -2,6 +2,7 @@ use core::any::TypeId;
 
 use bevy::{
     asset::Asset,
+    ecs::component::{ComponentId, Components},
     log::{error, warn},
     prelude::{AppTypeRegistry, Component, Mut, ReflectComponent},
     reflect::{PartialReflect, Reflect, TypePath},
@@ -164,6 +165,16 @@ impl DynamicScene {
         }
 
         Ok(())
+    }
+
+    /// Returns an iterator of the component ids of the top-level entity in this dynamic scene
+    pub fn iter_component_ids<'a>(
+        &'a self,
+        components: &'a Components,
+    ) -> impl Iterator<Item = ComponentId> + 'a {
+        self.component_props
+            .keys()
+            .filter_map(|type_id| components.get_id(*type_id))
     }
 
     /// Add a child to the dynamic scene.

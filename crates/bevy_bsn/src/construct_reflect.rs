@@ -86,6 +86,7 @@ pub(crate) fn register_reflect_construct(app: &mut App) {
     app.register_type_data::<Text2d, ReflectConstruct>();
     app.register_type_data::<TextFont, ReflectConstruct>();
     app.register_type_data::<TextColor, ReflectConstruct>();
+    app.register_type_data::<TextSpan, ReflectConstruct>();
 
     // TODO: Add more components
 }
