@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// Destination trait for [`EntityPatch`].
-pub trait Scene: RetainScene + Sized {
+pub trait Scene: RetainScene {
     /// The number of entities in this scene.
     const ENTITY_COUNT: usize;
 

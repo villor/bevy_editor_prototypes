@@ -14,9 +14,7 @@ fn main() {
 }
 
 fn sheep_plugin(app: &mut App) {
-    app.register_type::<SheepButton>()
-        .register_type_data::<SheepButton, ReflectConstruct>()
-        .add_systems(Startup, setup)
+    app.add_systems(Startup, setup)
         .add_systems(Update, sheep_system)
         .add_observer(observe_buttons);
 }
@@ -32,9 +30,7 @@ struct UiRoot;
 #[derive(Component)]
 struct Sheep;
 
-// TODO: Remove the Reflect requirement for dynamic scenes that are not reflected
-#[derive(Component, Default, Clone, Reflect)]
-#[reflect(Component)]
+#[derive(Component, Default, Clone)]
 enum SheepButton {
     #[default]
     Increment,
@@ -60,7 +56,7 @@ fn sheep_system(mut commands: Commands, sheep: Query<&Sheep>, root: Single<Entit
 
 // A function that returns an ecs template.
 // TODO: This is not an ideal way for generic reusable stuff
-fn counter<T: Component + Construct<Props = T> + Clone + Default + Reflect>(
+fn counter<T: Component + Construct<Props = T> + Clone>(
     num: usize,
     name: &str,
     inc: T,
