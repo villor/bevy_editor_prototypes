@@ -10,7 +10,7 @@ use crate::{
 
 /// Destination trait for [`EntityPatch`].
 pub trait Scene: RetainScene {
-    /// The number of entities in this scene.
+    /// The number of top-level entities in this scene.
     const ENTITY_COUNT: usize;
 
     /// Constructs a [`Scene`], inserts the components to the context entity, and recursively spawns scene descendants.
@@ -100,6 +100,8 @@ where
     pub patch: P,
     /// Child scenes of this entity.
     pub children: C,
+    /// Name
+    pub name: Option<String>,
 }
 
 impl<I, P, C> Scene for EntityPatch<I, P, C>

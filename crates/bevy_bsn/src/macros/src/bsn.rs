@@ -58,6 +58,7 @@ impl ToTokensInternal for BsnAstEntity {
                 inherit: (#(#inherits,)*),
                 patch: #patch,
                 children: (#(#children,)*),
+                name: None,
             }
         }
         .to_tokens(tokens);

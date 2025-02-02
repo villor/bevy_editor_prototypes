@@ -1,11 +1,8 @@
 //! Shared BSN AST core used by both macro and assets.
 
+use quote::ToTokens;
 use syn::{
-    braced, bracketed, parenthesized,
-    parse::{Parse, ParseStream},
-    punctuated::Punctuated,
-    token::{self, Brace, Paren},
-    Expr, Member, Path, Result, Token,
+    braced, bracketed, parenthesized, parse::{Parse, ParseStream}, punctuated::Punctuated, token::{self, Brace, Paren, Token}, Block, Expr, Ident, Member, Path, Result, Token
 };
 
 pub use quote;
@@ -19,10 +16,38 @@ pub struct BsnAstEntity {
     pub patch: BsnAstPatch,
     /// Child entities
     pub children: Punctuated<BsnAstEntity, Token![,]>,
+    /// Key for this entity
+    pub key: Option<BsnAstKey>,
 }
 
 impl Parse for BsnAstEntity {
     fn parse(input: ParseStream) -> Result<Self> {
+        let (key, expr) = match input.parse()? {
+            // Static key
+            Expr::Path(expr_path) if input.peek(Token![:]) => {
+                let key = expr_path.path.to_token_stream().to_string();
+                input.parse::<Token![:]>()?;
+                (Some(BsnAstKey::Static(key)), input.parse()?)
+            }
+            // Dynamic key
+            Expr::Block(expr_block) if input.peek(Token![:]) => {
+                input.parse::<Token![:]>()?;
+                (Some(BsnAstKey::Dynamic(expr_block.block)), input.parse()?)
+            }
+            // Anonymous
+            expr => (None, expr),
+        };
+
+        let key = if input.peek(Ident) && input.peek2(Token![:]) {
+            let key = input.parse::<Ident>()?;
+            input.parse::<Token![:]>()?;
+            Some(BsnAstKey::Static(key.to_string()))
+        } else {
+            if input.peek(Token![Brace]) {
+                input.fork
+            }
+        }
+
         let mut inherits = Punctuated::new();
         let patch;
         if input.peek(Paren) {
@@ -79,8 +104,17 @@ impl Parse for BsnAstEntity {
             inherits,
             patch,
             children,
+            key,
         })
     }
+}
+
+/// AST for a BSN entity key.
+pub enum BsnAstKey {
+    /// A static key: `key: ...`
+    Static(String),
+    /// A dynamic key: `{key}: ...`
+    Dynamic(Block),
 }
 
 /// AST for a BSN patch.

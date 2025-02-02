@@ -1,9 +1,12 @@
-use core::panic;
+use core::{hash::Hash, panic};
 
 use bevy::{
-    ecs::component::ComponentId,
-    prelude::{Bundle, Children, Component, Entity, EntityCommands, EntityWorldMut},
-    utils::hashbrown::{HashMap, HashSet},
+    ecs::{bundle::DynamicBundle, component::ComponentId},
+    prelude::{Bundle, Children, Component, Entity, EntityCommands, EntityWorldMut, Name},
+    utils::{
+        hashbrown::{HashMap, HashSet},
+        Hashed,
+    },
 };
 use variadics_please::all_tuples_enumerated;
 
@@ -12,10 +15,29 @@ use crate::{Scene, *};
 /// An anchor is an identifier for entities in a retained scene.
 #[derive(Hash, Eq, PartialEq, Clone)]
 pub enum Anchor {
-    /// The fragment is static and using an automatic incrementing ID.
+    /// The entity is static and using an automatic incrementing ID.
     Auto(u64),
-    /// The fragment has been explicitly named.
-    Named(String),
+    /// The entity has been explicitly keyed with a [`Key`].
+    Keyed(u64),
+}
+
+#[derive(Component, Eq, PartialEq, Hash, Clone)]
+#[component(immutable)]
+pub struct Key(pub HashedKey);
+
+#[derive(Eq, PartialEq, Hash, Clone)]
+pub struct HashedKey(Hashed<String>);
+
+impl From<&str> for HashedKey {
+    fn from(s: &str) -> Self {
+        HashedKey(Hashed::new(s.to_string()))
+    }
+}
+
+impl From<String> for HashedKey {
+    fn from(s: String) -> Self {
+        HashedKey(Hashed::new(s))
+    }
 }
 
 /// Receipts allow retaining of scenes that can be intelligently updated.
@@ -41,6 +63,11 @@ pub trait RetainScene {
         entity: &mut EntityWorldMut,
         current_anchors: HashMap<Anchor, Entity>,
     ) -> Result<HashMap<Anchor, Entity>, ConstructError>;
+
+    /// Returns the optional hash of the [`Key`] used on the root entity of this scene.
+    fn key_hash() -> Option<u64> {
+        None
+    }
 }
 
 impl RetainScene for () {
