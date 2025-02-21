@@ -1,5 +1,5 @@
 use bevy::prelude::{
-    ChildSpawnerCommands, Commands, EntityCommand, EntityCommands, EntityWorldMut,
+    ChildSpawnerCommands, Commands, EntityCommand, EntityCommands, EntityWorldMut, World,
 };
 use variadics_please::all_tuples_with_size;
 
@@ -36,6 +36,10 @@ pub trait Scene: Sized + DynamicPatch {
 
         Ok(())
     }
+
+    /// Prepares the hot-reload state for this scene.
+    #[cfg(feature = "hot_reload")]
+    fn prepare_hot_reload(&mut self, _world: &mut World) {}
 }
 
 impl Scene for () {
@@ -121,6 +125,13 @@ where
     pub children: C,
     /// Optional key used for retaining.
     pub key: Option<Key>,
+
+    /// Invocation id for hot-reload.
+    #[cfg(feature = "hot_reload")]
+    pub invocation_id: crate::hot_reload::InvocationId,
+    /// Hot patch to be applied during dynamic patch.
+    #[cfg(feature = "hot_reload")]
+    pub hot_patch: Option<crate::hot_reload::HotPatch>,
 }
 
 impl<I, P, C> Scene for EntityPatch<I, P, C>
@@ -134,14 +145,23 @@ where
     }
 
     /// Constructs an [`EntityPatch`], inserts the resulting bundle to the context entity, and recursively spawns children.
-    fn construct(self, context: &mut ConstructContext) -> Result<(), ConstructError> {
-        if !self.inherit.root_count() > 0 {
-            // Dynamic scene
+    fn construct(
+        #[allow(unused_mut)] mut self,
+        context: &mut ConstructContext,
+    ) -> Result<(), ConstructError> {
+        let construct_dynamically = !self.inherit.root_count() > 0;
+
+        #[cfg(feature = "hot_reload")]
+        let construct_dynamically = {
+            self.prepare_hot_reload(context.world);
+            construct_dynamically || self.hot_patch.is_some()
+        };
+
+        if construct_dynamically {
             let mut dynamic_scene = DynamicScene::default();
             self.dynamic_patch(&mut dynamic_scene);
             dynamic_scene.construct(context)?;
         } else {
-            // Static scene
             let bundle = context.construct_from_patch(self.patch)?;
             context.world.entity_mut(context.id).insert(bundle);
             self.children.spawn(context)?;
@@ -161,6 +181,13 @@ where
 
         Ok(())
     }
+
+    #[cfg(feature = "hot_reload")]
+    fn prepare_hot_reload(&mut self, world: &mut World) {
+        self.hot_patch = world
+            .resource::<crate::hot_reload::HotReloadState>()
+            .clone_hot_patch_if_changed(self.invocation_id);
+    }
 }
 
 impl<I, P, C> DynamicPatch for EntityPatch<I, P, C>
@@ -178,6 +205,11 @@ where
 
         // Push the children
         self.children.dynamic_patch_as_children(scene);
+
+        #[cfg(feature = "hot_reload")]
+        if let Some(hot_patch) = self.hot_patch {
+            hot_patch.dynamic_patch(scene);
+        }
     }
 }
 

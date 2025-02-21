@@ -22,6 +22,7 @@ fn main() {
 }
 
 #[derive(Component)]
+#[allow(dead_code)]
 struct SceneRoot(Handle<Bsn>);
 
 fn spawn_and_reload_scene(

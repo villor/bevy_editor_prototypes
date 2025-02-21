@@ -17,6 +17,10 @@ mod entity_patch;
 mod patch;
 mod retain;
 
+/// Hot reload support for BSN macros.
+#[cfg(feature = "hot_reload")]
+pub mod hot_reload;
+
 use bevy::app::App;
 use bevy::app::Plugin;
 
@@ -34,6 +38,9 @@ pub use retain::*;
 pub use bevy_bsn_macros::bsn;
 pub use bevy_bsn_macros::Construct;
 
+#[cfg(feature = "hot_reload")]
+pub use hot_reload::HotReloadApp;
+
 /// Adds support for BSN assets and reflection-based dynamic scenes.
 pub struct BsnPlugin;
 
@@ -42,5 +49,7 @@ impl Plugin for BsnPlugin {
         register_reflect_construct(app);
         bsn_asset_plugin(app);
         register_construct_impls(app);
+        #[cfg(feature = "hot_reload")]
+        app.add_plugins(hot_reload::HotReloadPlugin);
     }
 }

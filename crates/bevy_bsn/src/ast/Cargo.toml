@@ -3,6 +3,11 @@ name = "bevy_bsn_ast"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+visit = ["syn/visit"]
+hash = ["syn/extra-traits"]
+
 [dependencies]
 bevy.workspace = true
 thiserror.workspace = true

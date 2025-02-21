@@ -55,8 +55,10 @@ pub struct BsnReflector<'a> {
 pub struct ReflectedValue {
     /// The type id of the type that the `instance` represents.
     pub type_id: TypeId,
-    /// The instance of the type. Note that this may not be a concrete instance,
-    /// but a dynamic one.
+    /// The instance of the type.
+    ///
+    /// Note that this may not be a concrete instance,
+    /// but a dynamic one, and may not contain values for all the fields of the concrete type.
     pub instance: Box<dyn PartialReflect>,
 }
 
@@ -138,7 +140,8 @@ impl<'a> BsnReflector<'a> {
         Ok(dynamic_scene)
     }
 
-    fn reflect_component_patch(
+    /// Reflect a [`BsnComponent`] to a [`ReflectedComponentPatch`].
+    pub fn reflect_component_patch(
         &self,
         component: &BsnComponent,
     ) -> ReflectResult<ReflectedComponentPatch> {

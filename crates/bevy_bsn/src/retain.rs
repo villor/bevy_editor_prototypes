@@ -227,7 +227,13 @@ pub trait RetainSceneExt {
 }
 
 impl RetainSceneExt for EntityWorldMut<'_> {
-    fn retain_scene(&mut self, scene: impl Scene) -> Result<(), ConstructError> {
+    fn retain_scene(
+        &mut self,
+        #[allow(unused_mut)] mut scene: impl Scene,
+    ) -> Result<(), ConstructError> {
+        #[cfg(feature = "hot_reload")]
+        self.world_scope(|world| scene.prepare_hot_reload(world));
+
         let mut dynamic_scene = DynamicScene::default();
         scene.dynamic_patch(&mut dynamic_scene);
         dynamic_scene.retain(self)

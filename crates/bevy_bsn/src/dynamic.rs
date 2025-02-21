@@ -195,6 +195,11 @@ impl DynamicScene {
         self.children.push(child);
     }
 
+    /// Removes a component from the root entity of this dynamic scene.
+    pub fn remove_component(&mut self, type_id: TypeId) {
+        self.component_props.remove(&type_id);
+    }
+
     /// Adds a typed component patch to the root entity of this dynamic scene.
     pub fn patch_typed<C, F>(&mut self, patch: F)
     where

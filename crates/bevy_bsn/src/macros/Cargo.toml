@@ -6,6 +6,10 @@ edition = "2021"
 [lib]
 proc-macro = true
 
+[features]
+default = []
+hot_reload = []
+
 [dependencies]
 bevy_bsn_ast = { path = "../ast", version = "0.1.0" }
 

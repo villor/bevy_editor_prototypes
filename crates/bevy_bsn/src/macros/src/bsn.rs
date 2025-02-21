@@ -54,15 +54,34 @@ impl ToTokensInternal for BsnAstEntity {
         let inherits = self.inherits.iter().map(ToTokensInternal::to_token_stream);
         let children = self.children.iter().map(ToTokensInternal::to_token_stream);
         let key = self.key.to_token_stream();
-        quote! {
+
+        #[cfg(not(feature = "hot_reload"))]
+        let output = quote! {
+            #bevy_bsn::EntityPatch {
+                inherit: (#(#inherits,)*),
+                patch: #patch,
+                children: (#(#children,)*),
+                key: #key
+            }
+        };
+
+        #[cfg(feature = "hot_reload")]
+        let output = quote! {
             #bevy_bsn::EntityPatch {
                 inherit: (#(#inherits,)*),
                 patch: #patch,
                 children: (#(#children,)*),
                 key: #key,
+                invocation_id: #bevy_bsn::hot_reload::InvocationId::new(
+                    file!(),
+                    line!(),
+                    column!(),
+                ),
+                hot_patch: None,
             }
-        }
-        .to_tokens(tokens);
+        };
+
+        output.to_tokens(tokens);
     }
 }
 
