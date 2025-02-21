@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// A reflection error returned when reflecting [`Bsn`].
-#[derive(Error, Debug, Hash)]
+#[derive(Error, Debug, Hash, Clone)]
 pub enum ReflectError {
     /// Unknown type
     #[error("Can't resolve type `{0}`, is it registered?")]
@@ -52,6 +52,7 @@ pub struct BsnReflector<'a> {
 }
 
 /// A reflected instance of a type containing type id and the (maybe dynamic) instance itself.
+#[derive(Debug)]
 pub struct ReflectedValue {
     /// The type id of the type that the `instance` represents.
     pub type_id: TypeId,
@@ -69,11 +70,14 @@ impl ReflectedValue {
 }
 
 /// A reflected component patch containing the type id of the component and the props to be applied.
+#[derive(Debug)]
 pub struct ReflectedComponentPatch {
     /// The type id of the component.
     pub type_id: TypeId,
     /// The patch to be applied to the component props.
     pub props: ReflectedValue,
+    /// List of [`ReflectError`]'s for fields that were skipped.
+    pub skipped_fields: Vec<ReflectError>,
 }
 
 impl<'a> BsnReflector<'a> {
@@ -123,6 +127,11 @@ impl<'a> BsnReflector<'a> {
         // Add component patches
         for component in bsn_entity.components.iter() {
             let patch_data = self.reflect_component_patch(component)?;
+
+            if let Some(field_err) = patch_data.skipped_fields.first() {
+                return Err(field_err.clone());
+            }
+
             dynamic_scene.patch_reflected(
                 patch_data.type_id,
                 move |props: &mut dyn PartialReflect| {
@@ -156,25 +165,33 @@ impl<'a> BsnReflector<'a> {
                     return Err(ReflectError::UnknownType(format!("props for {}", path)));
                 };
 
+                let mut skipped_fields = Vec::new();
                 let props = match props {
                     BsnProps::None => self.reflect_path(path, Some(props_type.type_info()))?,
                     BsnProps::StructLike(props) => self.reflect_struct_like(
                         path,
                         props,
-                        |prop, type_info| self.reflect_prop_value(prop, type_info),
+                        |prop, type_info, skipped_fields| {
+                            self.reflect_prop_value(prop, type_info, skipped_fields)
+                        },
                         props_type.type_info(),
+                        &mut skipped_fields,
                     )?,
                     BsnProps::TupleLike(props) => self.reflect_call_like(
                         path,
                         props,
-                        |prop, type_info| self.reflect_prop_value(prop, type_info),
+                        |prop, type_info, skipped_fields| {
+                            self.reflect_prop_value(prop, type_info, skipped_fields)
+                        },
                         props_type.type_info(),
+                        &mut skipped_fields,
                     )?,
                 };
 
                 Ok(ReflectedComponentPatch {
                     type_id: component_type.type_id(),
                     props,
+                    skipped_fields,
                 })
             }
             BsnComponent::BracedExpr(expr) => Err(ReflectError::ExpressionNotSupported(format!(
@@ -188,6 +205,7 @@ impl<'a> BsnReflector<'a> {
         &self,
         prop: &BsnProp,
         ty: &TypeInfo,
+        skipped_fields: &mut Vec<ReflectError>,
     ) -> ReflectResult<Box<dyn PartialReflect>> {
         // This is fine : )
         if ty
@@ -210,7 +228,7 @@ impl<'a> BsnReflector<'a> {
                 )));
             };
 
-            let val = self.reflect_value(prop.value(), props_type.type_info())?;
+            let val = self.reflect_value(prop.value(), props_type.type_info(), skipped_fields)?;
             let mut dynamic_tuple = DynamicTuple::default();
             dynamic_tuple.insert_boxed(val.instance.into_partial_reflect());
             Ok(Box::new(DynamicEnum::new(
@@ -218,11 +236,18 @@ impl<'a> BsnReflector<'a> {
                 DynamicVariant::Tuple(dynamic_tuple),
             )))
         } else {
-            Ok(self.reflect_value(prop.value(), ty)?.instance)
+            Ok(self
+                .reflect_value(prop.value(), ty, skipped_fields)?
+                .instance)
         }
     }
 
-    fn reflect_value(&self, value: &BsnValue, ty: &TypeInfo) -> ReflectResult<ReflectedValue> {
+    fn reflect_value(
+        &self,
+        value: &BsnValue,
+        ty: &TypeInfo,
+        skipped_fields: &mut Vec<ReflectError>,
+    ) -> ReflectResult<ReflectedValue> {
         let type_id = ty.type_id();
         match value {
             BsnValue::UnknownExpr(expr) => Err(ReflectError::ExpressionNotSupported(expr.into())),
@@ -240,16 +265,22 @@ impl<'a> BsnReflector<'a> {
             BsnValue::StructLike(path, fields) => self.reflect_struct_like(
                 path,
                 fields,
-                |value, ty| Ok(self.reflect_value(value, ty)?.instance),
+                |value, ty, skipped_fields| {
+                    Ok(self.reflect_value(value, ty, skipped_fields)?.instance)
+                },
                 ty,
+                skipped_fields,
             ),
             BsnValue::Call(path, args) => self.reflect_call_like(
                 path,
                 args.iter().collect::<Vec<_>>().as_ref(),
-                |value, ty| Ok(self.reflect_value(value, ty)?.instance),
+                |value, ty, skipped_fields| {
+                    Ok(self.reflect_value(value, ty, skipped_fields)?.instance)
+                },
                 ty,
+                skipped_fields,
             ),
-            BsnValue::Tuple(items) => self.reflect_tuple(items, ty),
+            BsnValue::Tuple(items) => self.reflect_tuple(items, ty, skipped_fields),
             _ => Err(ReflectError::UnexpectedType(
                 format!("{:?}", value),
                 ty.type_path().into(),
@@ -303,7 +334,12 @@ impl<'a> BsnReflector<'a> {
         }
     }
 
-    fn reflect_tuple(&self, items: &[BsnValue], ty: &TypeInfo) -> ReflectResult<ReflectedValue> {
+    fn reflect_tuple(
+        &self,
+        items: &[BsnValue],
+        ty: &TypeInfo,
+        skipped_fields: &mut Vec<ReflectError>,
+    ) -> ReflectResult<ReflectedValue> {
         let tuple_info = ty.as_tuple().unwrap();
         if tuple_info.field_len() != items.len() {
             return Err(ReflectError::UnexpectedType(
@@ -315,7 +351,7 @@ impl<'a> BsnReflector<'a> {
         let mut dynamic_tuple = DynamicTuple::default();
         for (i, item) in items.iter().enumerate() {
             let ty = tuple_info.field_at(i).unwrap().type_info().unwrap();
-            dynamic_tuple.insert_boxed(self.reflect_value(item, ty)?.instance);
+            dynamic_tuple.insert_boxed(self.reflect_value(item, ty, skipped_fields)?.instance);
         }
         Ok(ReflectedValue::new(ty.type_id(), Box::new(dynamic_tuple)))
     }
@@ -359,9 +395,10 @@ impl<'a> BsnReflector<'a> {
         fields: &[(String, T)],
         get_value: F,
         ty: &TypeInfo,
+        skipped_fields: &mut Vec<ReflectError>,
     ) -> ReflectResult<ReflectedValue>
     where
-        F: Fn(&T, &TypeInfo) -> ReflectResult<Box<dyn PartialReflect>>,
+        F: Fn(&T, &TypeInfo, &mut Vec<ReflectError>) -> ReflectResult<Box<dyn PartialReflect>>,
     {
         trait StructInfoLike {
             fn field(&self, name: &str) -> Option<&NamedField>;
@@ -384,28 +421,40 @@ impl<'a> BsnReflector<'a> {
             info: &impl StructInfoLike,
             fields: &[(String, T)],
             get_value: F,
+            skipped_fields: &mut Vec<ReflectError>,
         ) -> ReflectResult<DynamicStruct>
         where
-            F: Fn(&T, &TypeInfo) -> ReflectResult<Box<dyn PartialReflect>>,
+            F: Fn(&T, &TypeInfo, &mut Vec<ReflectError>) -> ReflectResult<Box<dyn PartialReflect>>,
         {
             let mut dynamic_struct = DynamicStruct::default();
 
             for (name, value) in fields.iter() {
                 let Some(field) = info.field(name) else {
-                    return Err(ReflectError::UnknownField(
+                    skipped_fields.push(ReflectError::UnknownField(
                         (*name).clone(),
                         ty.type_path().into(),
                     ));
+                    continue;
                 };
 
-                dynamic_struct.insert_boxed(name, get_value(value, field.type_info().unwrap())?);
+                let val = match get_value(value, field.type_info().unwrap(), skipped_fields) {
+                    Ok(val) => val,
+                    Err(e) => {
+                        skipped_fields.push(e);
+                        continue;
+                    }
+                };
+
+                dynamic_struct.insert_boxed(name, val);
             }
 
             Ok(dynamic_struct)
         }
 
         let dynamic: Box<dyn PartialReflect> = match ty {
-            TypeInfo::Struct(info) => Box::new(reflect_fields(ty, info, fields, get_value)?),
+            TypeInfo::Struct(info) => {
+                Box::new(reflect_fields(ty, info, fields, get_value, skipped_fields)?)
+            }
             TypeInfo::Enum(info) => {
                 // Enum (struct-like)
                 let variant_name = path.split("::").last().unwrap();
@@ -418,7 +467,8 @@ impl<'a> BsnReflector<'a> {
                         ty.type_path().into(),
                     ));
                 };
-                let dynamic_struct = reflect_fields(ty, struct_info, fields, get_value)?;
+                let dynamic_struct =
+                    reflect_fields(ty, struct_info, fields, get_value, skipped_fields)?;
                 Box::new(DynamicEnum::new(
                     variant_name,
                     DynamicVariant::Struct(dynamic_struct),
@@ -438,9 +488,10 @@ impl<'a> BsnReflector<'a> {
         args: &[T],
         get_value: F,
         ty: &TypeInfo,
+        skipped_fields: &mut Vec<ReflectError>,
     ) -> ReflectResult<ReflectedValue>
     where
-        F: Fn(&T, &TypeInfo) -> ReflectResult<Box<dyn PartialReflect>>,
+        F: Fn(&T, &TypeInfo, &mut Vec<ReflectError>) -> ReflectResult<Box<dyn PartialReflect>>,
     {
         match ty.kind() {
             ReflectKind::TupleStruct => {
@@ -450,14 +501,22 @@ impl<'a> BsnReflector<'a> {
 
                 for (index, value) in args.iter().enumerate() {
                     let Some(field) = props_struct.field_at(index) else {
-                        return Err(ReflectError::UnknownField(
+                        skipped_fields.push(ReflectError::UnknownField(
                             index.to_string(),
                             ty.type_path().into(),
                         ));
+                        continue;
                     };
 
-                    //let val = self.reflect_value(value, field.type_info().unwrap())?;
-                    dynamic_struct.insert_boxed(get_value(value, field.type_info().unwrap())?);
+                    let val = match get_value(value, field.type_info().unwrap(), skipped_fields) {
+                        Ok(val) => val,
+                        Err(e) => {
+                            skipped_fields.push(e);
+                            continue;
+                        }
+                    };
+
+                    dynamic_struct.insert_boxed(val);
                 }
 
                 Ok(ReflectedValue::new(ty.type_id(), Box::new(dynamic_struct)))
@@ -473,12 +532,32 @@ impl<'a> BsnReflector<'a> {
                         ty.type_path().into(),
                     ));
                 };
-                let variant = variant.as_tuple_variant().unwrap();
+                let Ok(variant) = variant.as_tuple_variant() else {
+                    return Err(ReflectError::UnexpectedType(
+                        ty.type_path().into(),
+                        "tuple variant".into(),
+                    ));
+                };
 
                 let mut dynamic_tuple = DynamicTuple::default();
                 for (i, arg) in args.iter().enumerate() {
-                    let field = variant.field_at(i).unwrap();
-                    dynamic_tuple.insert_boxed(get_value(arg, field.type_info().unwrap())?);
+                    let Some(field) = variant.field_at(i) else {
+                        skipped_fields.push(ReflectError::UnknownField(
+                            i.to_string(),
+                            ty.type_path().into(),
+                        ));
+                        continue;
+                    };
+
+                    let val = match get_value(arg, field.type_info().unwrap(), skipped_fields) {
+                        Ok(val) => val,
+                        Err(e) => {
+                            skipped_fields.push(e);
+                            continue;
+                        }
+                    };
+
+                    dynamic_tuple.insert_boxed(val);
                 }
 
                 Ok(ReflectedValue::new(

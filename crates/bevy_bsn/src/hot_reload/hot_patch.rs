@@ -83,16 +83,19 @@ impl HotPatch {
         let mut component_patches =
             TypeIdMap::with_capacity_and_hasher(bsn.root.components.len(), NoOpHash);
         for bsn_component in bsn.root.components.iter() {
-            // TODO: Field-level error handling to allow partial reflection
-            let Ok(reflected_component) = reflector.reflect_component_patch(bsn_component) else {
-                warn!("Failed to reflect component: {:?}", bsn_component);
-                continue;
+            let reflected = match reflector.reflect_component_patch(bsn_component) {
+                Ok(reflected) => reflected,
+                Err(err) => {
+                    warn!("Skipping non-reflectable component: {}", err);
+                    continue;
+                }
             };
 
-            component_patches.insert(
-                reflected_component.type_id,
-                reflected_component.props.instance,
-            );
+            for field_err in reflected.skipped_fields.iter() {
+                warn!("Skipping non-reflectable field: {}", field_err);
+            }
+
+            component_patches.insert(reflected.type_id, reflected.props.instance);
         }
 
         Self {
