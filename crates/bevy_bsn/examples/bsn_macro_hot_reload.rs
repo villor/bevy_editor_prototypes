@@ -42,6 +42,7 @@ fn sheep_system(mut commands: Commands, sheep: Query<&Sheep>, root: Single<Entit
             bottom: Val::Px(15.0),
             right: Val::Px(15.0),
         } [
+            Text("MY TEXT"),
             ..counter(num_sheep, "sheep"),
         ]
     };

@@ -86,7 +86,8 @@ impl<'a> BsnReflector<'a> {
         Self { bsn, registry }
     }
 
-    fn try_resolve_type(&self, type_path: &str) -> ReflectResult<&TypeRegistration> {
+    /// Try to resolve a type by its path.
+    pub fn try_resolve_type(&self, type_path: &str) -> ReflectResult<&TypeRegistration> {
         // TODO: `use`-declarations instead of short_path
         // TODO: FunctionRegistry
         match self.registry.get_with_short_type_path(type_path) {
@@ -109,7 +110,8 @@ impl<'a> BsnReflector<'a> {
         }
     }
 
-    fn try_resolve_type_info(&self, type_path: &str) -> ReflectResult<&TypeInfo> {
+    /// Try to resolve a type info by its path.
+    pub fn try_resolve_type_info(&self, type_path: &str) -> ReflectResult<&TypeInfo> {
         Ok(self.try_resolve_type(type_path)?.type_info())
     }
 

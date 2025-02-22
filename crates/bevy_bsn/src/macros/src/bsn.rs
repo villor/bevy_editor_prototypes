@@ -9,7 +9,7 @@ use syn::{
 use bevy_bsn_ast::*;
 
 pub fn bsn(item: TokenStream) -> TokenStream {
-    match parse2::<BsnAstEntity>(item) {
+    match parse2::<BsnAst>(item) {
         Ok(bsn) => bsn.to_token_stream(),
         Err(e) => e.to_compile_error(),
     }
@@ -47,41 +47,66 @@ where
     }
 }
 
-impl ToTokensInternal for BsnAstEntity {
+impl ToTokensInternal for BsnAst {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let bevy_bsn = bevy_bsn_path();
-        let patch = &self.patch.to_token_stream();
-        let inherits = self.inherits.iter().map(ToTokensInternal::to_token_stream);
-        let children = self.children.iter().map(ToTokensInternal::to_token_stream);
-        let key = self.key.to_token_stream();
+        bsn_ast_entity_to_tokens(&self.root, true).to_tokens(tokens);
+    }
+}
 
-        #[cfg(not(feature = "hot_reload"))]
-        let output = quote! {
-            #bevy_bsn::EntityPatch {
-                inherit: (#(#inherits,)*),
-                patch: #patch,
-                children: (#(#children,)*),
-                key: #key
+fn bsn_ast_entity_to_tokens(entity: &BsnAstEntity, _is_root: bool) -> TokenStream {
+    let bevy_bsn = bevy_bsn_path();
+    let patch = &entity.patch.to_token_stream();
+    let inherits = entity
+        .inherits
+        .iter()
+        .map(ToTokensInternal::to_token_stream);
+    let children = entity
+        .children
+        .iter()
+        .map(ToTokensInternal::to_token_stream);
+    let key = entity.key.to_token_stream();
+
+    #[cfg(not(feature = "hot_reload"))]
+    let output = quote! {
+        #bevy_bsn::EntityPatch {
+            inherit: (#(#inherits,)*),
+            patch: #patch,
+            children: (#(#children,)*),
+            key: #key
+        }
+    };
+
+    #[cfg(feature = "hot_reload")]
+    let output = {
+        let invocation_id = if _is_root {
+            quote! {
+                Some(#bevy_bsn::hot_reload::InvocationId::new(
+                    file!(),
+                    line!(),
+                    column!(),
+                ))
             }
+        } else {
+            quote! { None }
         };
-
-        #[cfg(feature = "hot_reload")]
-        let output = quote! {
+        quote! {
             #bevy_bsn::EntityPatch {
                 inherit: (#(#inherits,)*),
                 patch: #patch,
                 children: (#(#children,)*),
                 key: #key,
-                invocation_id: #bevy_bsn::hot_reload::InvocationId::new(
-                    file!(),
-                    line!(),
-                    column!(),
-                ),
+                invocation_id: #invocation_id,
                 hot_patch: None,
             }
-        };
+        }
+    };
 
-        output.to_tokens(tokens);
+    output
+}
+
+impl ToTokensInternal for BsnAstEntity {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        bsn_ast_entity_to_tokens(self, false).to_tokens(tokens);
     }
 }
 

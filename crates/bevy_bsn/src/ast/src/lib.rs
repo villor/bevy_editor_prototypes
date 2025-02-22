@@ -12,6 +12,20 @@ pub use quote;
 pub use syn;
 
 /// Low-level `syn`-based bsn AST that may be used by both the macro and the asset loader.
+pub struct BsnAst {
+    /// The root entity
+    pub root: BsnAstEntity,
+}
+
+impl Parse for BsnAst {
+    fn parse(input: ParseStream) -> Result<Self> {
+        Ok(Self {
+            root: input.parse()?,
+        })
+    }
+}
+
+/// AST-representation of a BSN entity.
 pub struct BsnAstEntity {
     /// Inherited entities
     pub inherits: Punctuated<BsnAstInherit, Token![,]>,

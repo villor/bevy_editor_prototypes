@@ -232,7 +232,7 @@ impl RetainSceneExt for EntityWorldMut<'_> {
         #[allow(unused_mut)] mut scene: impl Scene,
     ) -> Result<(), ConstructError> {
         #[cfg(feature = "hot_reload")]
-        self.world_scope(|world| scene.prepare_hot_reload(world));
+        self.world_scope(|world| scene.init_hot_patch(world));
 
         let mut dynamic_scene = DynamicScene::default();
         scene.dynamic_patch(&mut dynamic_scene);
@@ -249,7 +249,12 @@ impl RetainSceneExt for EntityWorldMut<'_> {
         // Retain the children
         let anchors = child_scenes
             .into_iter()
-            .map(DynamicPatch::into_dynamic_scene)
+            .map(|#[allow(unused_mut)] mut child_scene| {
+                #[cfg(feature = "hot_reload")]
+                self.world_scope(|world| child_scene.init_hot_patch(world));
+
+                child_scene.into_dynamic_scene()
+            })
             .collect::<Vec<_>>()
             .retain_children(self, receipt.anchors)?;
 
