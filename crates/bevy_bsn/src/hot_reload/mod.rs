@@ -11,7 +11,7 @@ use bevy::{
 };
 use bevy_bsn_ast::syn::{self, spanned::Spanned};
 
-use crate::{Patch, Scene};
+use crate::{DynamicPatch, EntityPatch, Patch, Scene};
 
 mod rs_file;
 use rs_file::*;
@@ -57,21 +57,24 @@ pub struct HotReloadState {
 }
 
 impl HotReloadState {
-    /// Returns a [`HotPatch`] if the given invocation has hot-reloaded changes.
+    /// Adds a [`HotPatch`] if there are any hot reloaded changes.
+    ///
+    /// See: [`BsnInvocation::init_hot_patch`]
     #[inline]
     pub fn init_hot_patch<I, P, C>(
         &mut self,
-        invocation_id: InvocationId,
+        entity_patch: &mut EntityPatch<I, P, C>,
         world: &World,
-    ) -> Option<HotPatch>
-    where
+    ) where
         I: Scene,
-        P: Patch,
+        P: Patch + DynamicPatch,
         C: Scene,
     {
-        self.invocations
-            .get_mut(&invocation_id)
-            .and_then(|i| i.init_hot_patch::<I, P, C>(world))
+        if let Some(invocation_id) = entity_patch.invocation_id {
+            if let Some(invocation) = self.invocations.get_mut(&invocation_id) {
+                invocation.init_hot_patch(entity_patch, world);
+            }
+        }
     }
 }
 
@@ -199,13 +202,13 @@ fn hot_reload_modified(
                 // Get the original reflected patch
                 let Some(bsn_invocation) = invocations.get_mut(invocation_id) else {
                     warn!(
-                        "No previous patch found for invocation {:?} in {:?}, skipping hot reload.",
+                        "No original patch found for invocation {:?} in {:?}, skipping hot reload.",
                         invocation_id, file.path
                     );
                     continue;
                 };
 
-                // Apply the hot-reloaded patch
+                // Reload the changes
                 if let Err(e) = bsn_invocation.reload_invocation(invocation) {
                     warn!(
                         "Failed to parse hot-reloaded bsn! in {:?}: {}",

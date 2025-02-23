@@ -49,21 +49,32 @@ where
 
 impl ToTokensInternal for BsnAst {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        bsn_ast_entity_to_tokens(&self.root, true).to_tokens(tokens);
+        let mut entity_index = 0;
+        bsn_ast_entity_to_tokens(tokens, &self.root, &mut entity_index);
     }
 }
 
-fn bsn_ast_entity_to_tokens(entity: &BsnAstEntity, _is_root: bool) -> TokenStream {
+fn bsn_ast_entity_to_tokens(
+    tokens: &mut TokenStream,
+    entity: &BsnAstEntity,
+    entity_index: &mut usize,
+) {
     let bevy_bsn = bevy_bsn_path();
     let patch = &entity.patch.to_token_stream();
     let inherits = entity
         .inherits
         .iter()
         .map(ToTokensInternal::to_token_stream);
-    let children = entity
-        .children
-        .iter()
-        .map(ToTokensInternal::to_token_stream);
+
+    let my_entity_index = *entity_index;
+    *entity_index += 1;
+
+    let children = entity.children.iter().map(|c| {
+        let mut tokens = TokenStream::new();
+        bsn_ast_child_to_tokens(&mut tokens, c, entity_index);
+        tokens
+    });
+
     let key = entity.key.to_token_stream();
 
     #[cfg(not(feature = "hot_reload"))]
@@ -78,45 +89,35 @@ fn bsn_ast_entity_to_tokens(entity: &BsnAstEntity, _is_root: bool) -> TokenStrea
 
     #[cfg(feature = "hot_reload")]
     let output = {
-        let invocation_id = if _is_root {
-            quote! {
-                Some(#bevy_bsn::hot_reload::InvocationId::new(
-                    file!(),
-                    line!(),
-                    column!(),
-                ))
-            }
-        } else {
-            quote! { None }
-        };
         quote! {
             #bevy_bsn::EntityPatch {
                 inherit: (#(#inherits,)*),
                 patch: #patch,
                 children: (#(#children,)*),
                 key: #key,
-                invocation_id: #invocation_id,
+                invocation_id: Some(#bevy_bsn::hot_reload::InvocationId::new(
+                    file!(),
+                    line!(),
+                    column!(),
+                )),
+                entity_index: #my_entity_index,
                 hot_patch: None,
             }
         }
     };
 
-    output
+    output.to_tokens(tokens);
 }
 
-impl ToTokensInternal for BsnAstEntity {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        bsn_ast_entity_to_tokens(self, false).to_tokens(tokens);
-    }
-}
-
-impl ToTokensInternal for BsnAstChild {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            BsnAstChild::Entity(entity) => entity.to_tokens(tokens),
-            BsnAstChild::Spread(expr) => expr.to_tokens(tokens),
-        };
-    }
+fn bsn_ast_child_to_tokens(
+    tokens: &mut TokenStream,
+    child: &BsnAstChild,
+    entity_index: &mut usize,
+) {
+    match child {
+        BsnAstChild::Entity(entity) => bsn_ast_entity_to_tokens(tokens, entity, entity_index),
+        BsnAstChild::Spread(expr) => expr.to_tokens(tokens),
+    };
 }
 
 impl ToTokensInternal for Option<BsnAstKey> {

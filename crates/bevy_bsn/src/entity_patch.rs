@@ -142,6 +142,9 @@ where
     /// Invocation id for hot-reload.
     #[cfg(feature = "hot_reload")]
     pub invocation_id: Option<crate::hot_reload::InvocationId>,
+    /// Index within the template
+    #[cfg(feature = "hot_reload")]
+    pub entity_index: usize,
     /// Hot patch to be applied during dynamic patch.
     #[cfg(feature = "hot_reload")]
     pub hot_patch: Option<crate::hot_reload::HotPatch>,
@@ -200,17 +203,16 @@ where
     fn init_hot_patch(&mut self, world: &mut World) {
         use bevy::ecs::world::Mut;
 
+        // Recursively initialize hot patches for inherits and descendants
         self.inherit.init_hot_patch(world);
-
-        if let Some(invocation_id) = self.invocation_id {
-            world.resource_scope(
-                |world: &mut World, mut state: Mut<crate::hot_reload::HotReloadState>| {
-                    self.hot_patch = state.init_hot_patch::<I, P, C>(invocation_id, world);
-                },
-            );
-        }
-
         self.children.init_hot_patch(world);
+
+        // Initialize hot patch for this entity
+        world.resource_scope(
+            |world: &mut World, mut state: Mut<crate::hot_reload::HotReloadState>| {
+                state.init_hot_patch(self, world);
+            },
+        );
     }
 }
 

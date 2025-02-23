@@ -41,6 +41,7 @@ fn sheep_system(mut commands: Commands, sheep: Query<&Sheep>, root: Single<Entit
             position_type: PositionType::Absolute,
             bottom: Val::Px(15.0),
             right: Val::Px(15.0),
+            column_gap: Val::Px(10.0),
         } [
             Text("MY TEXT"),
             ..counter(num_sheep, "sheep"),

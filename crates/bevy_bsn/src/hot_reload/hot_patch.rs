@@ -12,49 +12,41 @@ use bevy::{
 };
 use bevy_bsn_ast::{syn, BsnAstEntity};
 
-use crate::{Bsn, BsnReflector, DynamicPatch, DynamicScene, Patch, Scene};
+use crate::{Bsn, BsnEntity, BsnReflector, DynamicPatch, DynamicScene, EntityPatch, Patch, Scene};
 
 use super::hash;
 
-/// A patch to apply hot-reloaded changes to a [`DynamicScene`].
+/// The bundle/component part of a hot patch.
 #[derive(Debug, Clone)]
-pub struct HotPatch {
+struct HotBundlePatch {
+    hash: u64,
     component_patches: Arc<TypeIdMap<Arc<dyn PartialReflect>>>,
     removed_components: Arc<HashSet<TypeId, NoOpHash>>,
-    // TODO: Children
 }
 
-// impl DynamicPatch for HotPatch {
-//     fn dynamic_patch(self, scene: &mut DynamicScene) {
-//         for (type_id, patch) in self.component_patches.iter() {
-//             let patch = patch.clone();
-//             scene.patch_reflected(*type_id, move |props: &mut dyn PartialReflect| {
-//                 props.apply(patch.as_ref());
-//             });
-//         }
-
-//         for type_id in self.removed_components.iter() {
-//             scene.remove_component(*type_id);
-//         }
-//     }
-// }
-
-impl HotPatch {
-    fn new_diffed(registry: &TypeRegistry, invocation: &BsnInvocation) -> HotPatch {
-        let bsn = &invocation.current_bsn;
-        let reflector = BsnReflector::new(bsn, registry);
-
-        let original_components = &invocation.original_components();
-        let component_count = bsn.root.components.len();
+impl HotBundlePatch {
+    fn reload(
+        entity: &BsnEntity,
+        original_bundle: &OriginalBundle,
+        reflector: &BsnReflector,
+        previous: Option<HotBundlePatch>,
+    ) -> Self {
+        let bundle_hash = hash(&entity.components);
+        if let Some(previous) = previous {
+            if bundle_hash == previous.hash {
+                return previous;
+            }
+        }
 
         // Add patches for new or changed components
+        let component_count = entity.components.len();
         let mut component_patches = TypeIdMap::with_capacity_and_hasher(component_count, NoOpHash);
         let mut keep_components = HashSet::with_capacity_and_hasher(component_count, NoOpHash);
-        for bsn_component in bsn.root.components.iter() {
-            // If there is a matching component in original_components (by hash), keep it.
+        for bsn_component in entity.components.iter() {
+            // If there is a matching component in original_bundle (by hash), keep it.
             let component_hash = hash(bsn_component);
-            if let Some(original_component) = original_components.get_by_hash(component_hash) {
-                keep_components.insert(original_component.type_id);
+            if let Some(type_id) = original_bundle.get_by_hash(component_hash) {
+                keep_components.insert(type_id);
                 continue;
             }
 
@@ -78,22 +70,44 @@ impl HotPatch {
 
         // Detect removed components
         let mut removed_components = HashSet::with_hasher(NoOpHash);
-        for original_component in original_components.iter() {
-            if !keep_components.contains(&original_component.type_id) {
-                debug!("Component removed: {:?}", original_component.type_id);
-                removed_components.insert(original_component.type_id);
+        for type_id in original_bundle.iter() {
+            if !keep_components.contains(type_id) {
+                debug!("Component removed: {:?}", type_id);
+                removed_components.insert(*type_id);
             }
         }
 
-        debug!(
-            "Hot patch diffed\n Original components:\n{:?} \n\nPatches: {:?}\n\nRemoved: {:?}",
-            original_components, component_patches, removed_components
-        );
-
         Self {
+            hash: bundle_hash,
             component_patches: Arc::new(component_patches),
             removed_components: Arc::new(removed_components),
         }
+    }
+}
+
+/// A patch to apply hot-reloaded changes to a [`DynamicScene`].
+#[derive(Debug, Clone)]
+pub struct HotPatch {
+    bundle_patch: HotBundlePatch,
+    // TODO: Children
+}
+
+impl HotPatch {
+    fn reload(
+        registry: &TypeRegistry,
+        original_bundle: &OriginalBundle,
+        bsn: &Bsn,
+        bsn_entity: &BsnEntity,
+        previous: Option<HotPatch>,
+    ) -> HotPatch {
+        let reflector = BsnReflector::new(bsn, registry);
+        let bundle_patch = HotBundlePatch::reload(
+            bsn_entity,
+            original_bundle,
+            &reflector,
+            previous.map(|p| p.bundle_patch),
+        );
+        Self { bundle_patch }
     }
 
     /// Hook that replaces `dynamic_patch` for an [`EntityPatch`] with a hot patch.
@@ -117,13 +131,13 @@ impl HotPatch {
         patch.dynamic_patch(dynamic_scene);
 
         // Apply the hot patch
-        for (type_id, patch) in self.component_patches.iter() {
+        for (type_id, patch) in self.bundle_patch.component_patches.iter() {
             let patch = patch.clone();
             dynamic_scene.patch_reflected(*type_id, move |props: &mut dyn PartialReflect| {
                 props.apply(patch.as_ref());
             });
         }
-        for type_id in self.removed_components.iter() {
+        for type_id in self.bundle_patch.removed_components.iter() {
             dynamic_scene.remove_component(*type_id);
         }
 
@@ -135,25 +149,16 @@ impl HotPatch {
 }
 
 #[derive(Debug)]
-struct OriginalComponent {
-    //index: usize,
-    type_id: TypeId,
-    //hash: u64,
-}
-
-#[derive(Debug)]
-struct OriginalComponents {
-    components: Vec<OriginalComponent>,
+struct OriginalBundle {
+    type_ids: Vec<TypeId>,
     indices_by_hash: HashMap<u64, usize, NoOpHash>,
-    //indices_by_type_id: TypeIdMap<usize>,
 }
 
-impl OriginalComponents {
-    fn new<B: Bundle>(original_bsn: &Bsn, world: &World) -> Option<Self> {
-        let size_hint = original_bsn.root.components.len();
-        let mut original_components = Vec::with_capacity(size_hint);
+impl OriginalBundle {
+    fn new<B: Bundle>(original_entity: &BsnEntity, world: &World) -> Option<Self> {
+        let size_hint = original_entity.components.len();
+        let mut type_ids = Vec::with_capacity(size_hint);
         let mut indices_by_hash = HashMap::with_capacity_and_hasher(size_hint, NoOpHash);
-        let mut indices_by_type_id = TypeIdMap::with_capacity_and_hasher(size_hint, NoOpHash);
 
         let mut has_unregistered = false;
         let mut i = 0;
@@ -170,15 +175,10 @@ impl OriginalComponents {
                 .type_id()
                 .unwrap();
 
-            let hash = hash(&original_bsn.root.components[i]);
+            let hash = hash(&original_entity.components[i]);
 
-            original_components.push(OriginalComponent {
-                //index: i,
-                type_id,
-                //hash,
-            });
+            type_ids.push(type_id);
             indices_by_hash.insert(hash, i);
-            indices_by_type_id.insert(type_id, i);
 
             i += 1;
         });
@@ -188,31 +188,24 @@ impl OriginalComponents {
         }
 
         Some(Self {
-            components: original_components,
+            type_ids,
             indices_by_hash,
-            //indices_by_type_id,
         })
     }
 
-    fn iter(&self) -> impl Iterator<Item = &OriginalComponent> {
-        self.components.iter()
+    fn iter(&self) -> impl Iterator<Item = &TypeId> {
+        self.type_ids.iter()
     }
 
-    fn get_unchecked(&self, index: usize) -> &OriginalComponent {
-        &self.components[index]
+    fn get_unchecked(&self, index: usize) -> TypeId {
+        self.type_ids[index]
     }
 
-    fn get_by_hash(&self, hash: u64) -> Option<&OriginalComponent> {
+    fn get_by_hash(&self, hash: u64) -> Option<TypeId> {
         self.indices_by_hash
             .get(&hash)
             .map(|i| self.get_unchecked(*i))
     }
-
-    // fn get_by_type_id(&self, type_id: TypeId) -> Option<&OriginalComponent> {
-    //     self.indices_by_type_id
-    //         .get(&type_id)
-    //         .map(|i| self.get_unchecked(*i))
-    // }
 }
 
 /// Holds information about a bsn!-macro invocation for hot-reloading.
@@ -222,11 +215,11 @@ pub struct BsnInvocation {
     current_hash: u64,
 
     original_bsn: Arc<Bsn>,
-    original_components: Option<OriginalComponents>,
+    original_bundles: HashMap<usize, OriginalBundle>,
     current_bsn: Arc<Bsn>,
 
-    hot_patch: Option<HotPatch>,
-    // TODO: Children
+    previous_hot_patches: HashMap<usize, HotPatch>,
+    hot_patches: HashMap<usize, HotPatch>,
 }
 
 impl BsnInvocation {
@@ -244,10 +237,11 @@ impl BsnInvocation {
         Ok(Self {
             original_hash: macro_hash,
             current_hash: macro_hash,
-            original_components: None,
+            original_bundles: Default::default(),
             original_bsn: bsn.clone(),
             current_bsn: bsn,
-            hot_patch: None,
+            previous_hot_patches: Default::default(),
+            hot_patches: Default::default(),
         })
     }
 
@@ -257,7 +251,6 @@ impl BsnInvocation {
         if macro_hash == self.current_hash {
             return Ok(());
         }
-        self.current_hash = macro_hash;
 
         if macro_hash == self.original_hash {
             self.reset_to_original();
@@ -268,58 +261,100 @@ impl BsnInvocation {
         let bsn = Bsn::from(&bsn_ast);
 
         self.current_bsn = Arc::new(bsn);
+        self.current_hash = macro_hash;
 
         // Reset the hot patch as it is now outdated. It will be re-diffed on next use.
-        self.hot_patch = None;
+        self.previous_hot_patches = core::mem::take(&mut self.hot_patches);
 
         Ok(())
     }
 
-    /// Prepares a [`crate::EntityPatch`] for hot patching. This should be called before calling [`crate::DynamicPatch::dynamic_patch`].
+    /// Prepares a bsn!-invocation for hot patching.
     ///
-    /// Returns a [`HotPatch`] if there are any changes from the original patch.
+    /// This should only be called before any call to [`crate::DynamicPatch::dynamic_patch`].
+    ///
+    /// If there are any hot reloaded changes, this will set the hot patch to be applied during dynamic patch.
     #[inline]
-    pub fn init_hot_patch<I, P, C>(&mut self, world: &World) -> Option<HotPatch>
-    where
+    pub fn init_hot_patch<I, P, C>(
+        &mut self,
+        entity_patch: &mut EntityPatch<I, P, C>,
+        world: &World,
+    ) where
         I: Scene,
-        P: Patch,
+        P: Patch + DynamicPatch,
         C: Scene,
     {
         if !self.has_changes() {
-            return None;
+            return;
         }
 
-        // Initialize the original components using static [`Bundle`] information if not already done.
-        if self.original_components.is_none() {
-            self.original_components =
-                OriginalComponents::new::<P::Construct>(&self.original_bsn, world);
-            if self.original_components.is_none() {
+        let entity_index = entity_patch.entity_index;
+
+        // Initialize the original bundle info using [`Bundle`] if not already done.
+        if !self.original_bundles.contains_key(&entity_index) {
+            let entity = find_bsn_entity_by_index(&self.original_bsn, entity_index)
+                .expect("entity index mismatch");
+
+            let Some(original_bundle) = OriginalBundle::new::<P::Construct>(entity, world) else {
                 warn!(
-                    "Hot-patching failed due to unregistered components. Try saving the file again."
+                    "Some changes could not be hot-reloaded due to unregistered components. Try saving the file again."
                 );
-                self.reset_to_original();
-                return None;
-            }
+                return;
+            };
+
+            self.original_bundles.insert(entity_index, original_bundle);
         }
 
-        // Diff and update the hot patch if needed.
-        if self.hot_patch.is_none() {
+        // Diff and update the hot patch if needed
+        let hot_patch = self.hot_patches.entry(entity_index).or_insert_with(|| {
             let registry = world.resource::<AppTypeRegistry>().read();
-            self.hot_patch = Some(HotPatch::new_diffed(&registry, self));
-        }
 
-        self.hot_patch.clone()
-    }
+            let bsn_entity = find_bsn_entity_by_index(&self.current_bsn, entity_index)
+                .expect("entity index mismatch");
 
-    fn original_components(&self) -> &OriginalComponents {
-        self.original_components
-            .as_ref()
-            .expect("Original components not initialized")
+            HotPatch::reload(
+                &registry,
+                self.original_bundles.get(&entity_index).unwrap(),
+                &self.current_bsn,
+                bsn_entity,
+                self.previous_hot_patches.get(&entity_index).cloned(),
+            )
+        });
+
+        entity_patch.hot_patch = Some(hot_patch.clone());
     }
 
     fn reset_to_original(&mut self) {
         self.current_hash = self.original_hash;
         self.current_bsn = self.original_bsn.clone();
-        self.hot_patch = None;
+        self.previous_hot_patches = core::mem::take(&mut self.hot_patches);
     }
+}
+
+fn find_bsn_entity_by_index(bsn: &Bsn, id: usize) -> Option<&BsnEntity> {
+    if id == 0 {
+        return Some(&bsn.root);
+    }
+
+    fn recurse<'a>(
+        entity: &'a BsnEntity,
+        needle: usize,
+        current_id: &mut usize,
+    ) -> Option<&'a BsnEntity> {
+        for child in entity.children.iter() {
+            if *current_id == needle {
+                return Some(child);
+            }
+            *current_id += 1;
+
+            if let Some(descendant) = recurse(child, needle, current_id) {
+                return Some(descendant);
+            }
+        }
+
+        None
+    }
+
+    let mut current_id = 1;
+    recurse(&bsn.root, id, &mut current_id)
 }
