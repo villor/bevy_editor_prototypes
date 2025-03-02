@@ -1,0 +1,29 @@
+[package]
+name = "bevy_proto_bsn"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+hot_reload = [
+    'bevy_proto_bsn_macros/hot_reload',
+    'bevy_proto_bsn_ast/visit',
+    'bevy_proto_bsn_ast/hash',
+    'bevy/file_watcher',
+    'bevy/multi_threaded',
+]
+
+[dependencies]
+bevy_proto_bsn_ast = { path = "src/ast", version = "0.1.0" }
+bevy_proto_bsn_macros = { path = "src/macros", version = "0.1.0" }
+
+bevy = { workspace = true }
+thiserror = { workspace = true }
+variadics_please = { workspace = true }
+
+[lints]
+workspace = true
+
+[[example]]
+name = "bsn_macro_hot_reload"
+required-features = ["hot_reload"]
