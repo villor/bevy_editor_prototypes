@@ -37,7 +37,7 @@ pub trait Scene: Sized + DynamicPatch {
         Ok(())
     }
 
-    /// Prepares the hot-reload state for this scene.
+    /// Prepares this scene for `hot_macro` patching.
     #[cfg(feature = "hot_macro")]
     fn init_hot_patch(&mut self, _world: &mut World) {}
 }
@@ -162,7 +162,7 @@ where
         #[allow(unused_mut)] mut self,
         context: &mut ConstructContext,
     ) -> Result<(), ConstructError> {
-        let construct_dynamically = !self.inherit.root_count() > 0;
+        let construct_dynamically = self.inherit.root_count() > 0;
 
         #[cfg(feature = "hot_macro")]
         let construct_dynamically = {
@@ -231,10 +231,6 @@ where
 
         // Apply this patch itself
         self.patch.dynamic_patch(scene);
-        #[cfg(feature = "hot_macro")]
-        {
-            scene.hot_id = Some(self.hot_id);
-        }
 
         // Push the children
         self.children.dynamic_patch_as_children(scene);

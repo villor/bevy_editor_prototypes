@@ -8,7 +8,7 @@ use bevy::{
     log::{debug, error, warn},
     platform_support::{
         collections::{HashMap, HashSet},
-        hash::NoOpHash,
+        hash::{FixedHasher, NoOpHash},
     },
     reflect::{PartialReflect, TypeRegistry},
     utils::TypeIdMap,
@@ -20,22 +20,18 @@ use crate::{
     Scene,
 };
 
-use super::hash;
+use super::{hash, EntityPatchId};
 
 /// The bundle/component part of a hot patch.
 #[derive(Debug, Clone)]
 struct HotBundlePatch {
-    hash: u64,
     component_patches: Arc<TypeIdMap<Box<dyn PartialReflect>>>,
     removed_components: Arc<HashSet<TypeId, NoOpHash>>,
 }
 
 impl HotBundlePatch {
     fn new(components: &[BsnComponent], reflector: &BsnReflector) -> Self {
-        let bundle_hash = hash(components);
-
         Self {
-            hash: bundle_hash,
             component_patches: Arc::new(
                 components
                     .iter()
@@ -60,8 +56,6 @@ impl HotBundlePatch {
         original_bundle: &OriginalBundle,
         reflector: &BsnReflector,
     ) -> Self {
-        let bundle_hash = hash(components);
-
         // Add patches for new or changed components
         let component_count = components.len();
         let mut component_patches = TypeIdMap::with_capacity_and_hasher(component_count, NoOpHash);
@@ -102,7 +96,6 @@ impl HotBundlePatch {
         }
 
         Self {
-            hash: bundle_hash,
             component_patches: Arc::new(component_patches),
             removed_components: Arc::new(removed_components),
         }
@@ -138,7 +131,7 @@ pub struct HotPatch {
     original_bundle: Option<Arc<OriginalBundle>>,
     bundle_patch: Option<HotBundlePatch>,
     related: HotRelated,
-    replace_with: Option<Arc<HotPatch>>,
+    new_root: Option<Arc<HotPatch>>,
 }
 
 pub(crate) type HotDeferred = Arc<Mutex<HashMap<usize, DynamicScene>>>;
@@ -177,34 +170,26 @@ impl HotPatch {
             dynamic_scene.hot_deferred = Some(Default::default());
         }
 
-        // Apply the inherited patches
-        // TODO: Support hot-reloading changes to inheritance list
-        inherit.dynamic_patch(dynamic_scene);
+        // Apply the static patch if this entity is still active
+        if self.active {
+            if self.new_root.is_none() {
+                // This is a non-root or a root that is still a root, apply it directly to the dynamic scene
+                Self::dynamic_patch_original(hot_id, inherit, patch, self.related, dynamic_scene);
+            } else {
+                // This is a root that is no longer a root, patch it to a new dynamic scene and defer it
+                let mut old_root = DynamicScene::default();
+                Self::dynamic_patch_original(hot_id, inherit, patch, self.related, &mut old_root);
+                dynamic_scene
+                    .hot_deferred
+                    .as_mut()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .insert(0, old_root);
+            }
+        }
 
-        // Apply this patch itself
-        patch.dynamic_patch(dynamic_scene);
-        dynamic_scene.hot_id = Some(hot_id);
-
-        // TODO: Patch components
-        // if let Some(bundle_patch) = self.bundle_patch {
-        //   if self.active {}
-        // }
-        // Apply component changes
-        // if let Some(bundle_patch) = self.bundle_patch {
-        //     for (type_id, patch) in bundle_patch.component_patches.iter() {
-        //         let patch = patch.clone();
-        //         dynamic_scene.patch_reflected(*type_id, move |props: &mut dyn PartialReflect| {
-        //             props.apply(patch.as_ref());
-        //         });
-        //     }
-        //     for type_id in bundle_patch.removed_components.iter() {
-        //         // TODO: This should not remove inherited components
-        //         dynamic_scene.remove_component(*type_id);
-        //     }
-        // }
-
-        // Recursively create/patch dynamic scenes for (original) children
-        let children_has_changed = self.related.get(&TypeId::of::<Children>()).is_some();
+        // Recursively create/patch dynamic scenes for (original) children, storing them in the deferred map
         let hot_deferred_a = dynamic_scene.hot_deferred.clone();
         let mut hot_deferred_b = dynamic_scene.hot_deferred.clone();
         children.dynamic_patch_discrete(
@@ -214,28 +199,27 @@ impl HotPatch {
                 child_scene
             },
             &mut |child_scene| {
-                if children_has_changed {
-                    // Changed children are deferred, to be arranged later
+                if let Some(hot_id) = child_scene.hot_id {
                     hot_deferred_b
                         .as_mut()
                         .unwrap()
                         .lock()
                         .unwrap()
-                        .insert(child_scene.hot_id.unwrap().entity_index, child_scene);
-                } else {
-                    // Unchanged children can be directly pushed to the dynamic scene
-                    dynamic_scene.push_child(child_scene);
+                        .insert(hot_id.entity_index, child_scene);
                 }
             },
         );
 
-        // Store the new children on the dynamic_scene if changed
-        if children_has_changed {
-            dynamic_scene.hot_related = Some(self.related);
-        }
-
         if is_root {
-            // Make a final recursive pass over the dynamic scenes to add the deferred children in their new spots
+            // Patch new root if we have one
+            if let Some(new_root) = self.new_root {
+                if let Some(bundle_patch) = new_root.bundle_patch.clone() {
+                    bundle_patch.dynamic_patch(dynamic_scene);
+                }
+                dynamic_scene.hot_related = Some(new_root.related.clone());
+            }
+
+            // Recursively arrange the deferred children in their (possibly) new spots and push any new scenes
             let hot_deferred_arc = dynamic_scene.hot_deferred.take().unwrap();
             let mut hot_deferred = hot_deferred_arc.lock().unwrap();
             Self::arrange_children(&mut hot_deferred, dynamic_scene);
@@ -245,6 +229,30 @@ impl HotPatch {
         }
     }
 
+    fn dynamic_patch_original<I, P>(
+        hot_id: EntityPatchId,
+        inherit: I,
+        patch: P,
+        hot_related: HotRelated,
+        dynamic_scene: &mut DynamicScene,
+    ) where
+        I: Scene,
+        P: Patch + DynamicPatch,
+    {
+        // Apply the inherited patches
+        inherit.dynamic_patch(dynamic_scene);
+
+        // Apply this patch itself
+        patch.dynamic_patch(dynamic_scene);
+
+        // Store the new children on the dynamic_scene
+        // TODO: Just keep this in the root hot patch?
+        dynamic_scene.hot_related = Some(hot_related);
+
+        // Set the hot_id on the dynamic scene so this entity patch can be identified for deferring
+        dynamic_scene.hot_id = Some(hot_id);
+    }
+
     fn arrange_children(
         hot_deferred: &mut HashMap<usize, DynamicScene>,
         dynamic_scene: &mut DynamicScene,
@@ -252,8 +260,8 @@ impl HotPatch {
         // Push any deferred children to the dynamic scene
         if let Some(new_children) = dynamic_scene
             .hot_related
-            .as_ref()
-            .and_then(|hot_related| hot_related.get(&TypeId::of::<Children>()))
+            .as_mut()
+            .and_then(|hot_related| hot_related.remove(&TypeId::of::<Children>()))
         {
             for hot_item in new_children.clone().iter() {
                 match hot_item {
@@ -261,10 +269,32 @@ impl HotPatch {
                         let deferred = hot_deferred
                             .remove(original_index)
                             .or_else(|| {
-                                error!("deferred not found: {}", original_index);
+                                error!(
+                                    "deferred not found: {}\n{:?}",
+                                    original_index, hot_deferred
+                                );
                                 None
                             })
                             .unwrap();
+
+                        // TODO: Patch components
+                        // if let Some(bundle_patch) = self.bundle_patch {
+                        //   if self.active {}
+                        // }
+                        // Apply component changes
+                        // if let Some(bundle_patch) = self.bundle_patch {
+                        //     for (type_id, patch) in bundle_patch.component_patches.iter() {
+                        //         let patch = patch.clone();
+                        //         dynamic_scene.patch_reflected(*type_id, move |props: &mut dyn PartialReflect| {
+                        //             props.apply(patch.as_ref());
+                        //         });
+                        //     }
+                        //     for type_id in bundle_patch.removed_components.iter() {
+                        //         // TODO: This should not remove inherited components
+                        //         dynamic_scene.remove_component(*type_id);
+                        //     }
+                        // }
+
                         dynamic_scene.push_child(deferred);
                     }
                     HotItem::NewEntity(hot_patch) => {
@@ -292,8 +322,6 @@ pub struct BsnInvocation {
     original_hash: u64,
     current_hash: u64,
     original_bsn: OriginalBsn,
-    //original_bundles: HashMap<usize, OriginalBundle>,
-    /// Hot patches - by original entity index
     hot_patches: HashMap<usize, HotPatch>,
     burned_original_indices: HashSet<usize>,
 }
@@ -310,12 +338,17 @@ impl BsnInvocation {
         let bsn_ast = syn::parse2::<BsnAstEntity>(macro_ast.tokens.clone())?;
         let bsn = OriginalBsn::from(&bsn_ast);
 
+        // Initialize (inactive) hot patches for each entity
+        let mut hot_patches = HashMap::with_capacity_and_hasher(bsn.entities.len(), FixedHasher);
+        for index in bsn.entities.iter().map(|entity| entity.entity_index) {
+            hot_patches.insert(index, HotPatch::default());
+        }
+
         Ok(Self {
             original_hash: macro_hash,
             current_hash: macro_hash,
-            //original_bundles: Default::default(),
             original_bsn: bsn,
-            hot_patches: Default::default(),
+            hot_patches,
             burned_original_indices: Default::default(),
         })
     }
@@ -331,11 +364,6 @@ impl BsnInvocation {
             return Ok(());
         }
 
-        // Set all hot patches to inactive
-        for hot_patch in self.hot_patches.values_mut() {
-            hot_patch.active = false;
-        }
-
         // Update the current hash and return if back to original
         self.current_hash = macro_hash;
         if self.current_hash == self.original_hash {
@@ -347,6 +375,11 @@ impl BsnInvocation {
         let bsn = Bsn::from(&bsn_ast);
         let reflector = BsnReflector::new(&bsn, registry);
 
+        // Set all hot patches to inactive
+        for hot_patch in self.hot_patches.values_mut() {
+            hot_patch.active = false;
+        }
+
         // Diff and reload the new bsn recursively
         self.burned_original_indices.clear();
         let root_item = self.reload_entity(&bsn.root, &reflector);
@@ -354,72 +387,37 @@ impl BsnInvocation {
         // Replace root patch if needed
         let root_hot_patch = self.hot_patches.entry(0).or_default();
         if let HotItem::NewEntity(replaced_root) = root_item {
-            root_hot_patch.replace_with = Some(Arc::new(replaced_root));
+            root_hot_patch.new_root = Some(Arc::new(replaced_root));
         } else {
-            root_hot_patch.replace_with = None;
+            root_hot_patch.new_root = None;
         }
 
         Ok(())
     }
 
     fn reload_entity(&mut self, entity: &BsnEntity, reflector: &BsnReflector) -> HotItem {
-        let entity_hash = hash(entity);
+        if let Some(matching_index) = self.find_original_match(entity) {
+            // Found a match, update the hot patch for this entity
+            self.burned_original_indices.insert(matching_index);
 
-        // Check if there is an original entity with the exact same hash
-        if let Some(original_entity) = self
-            .original_bsn
-            .first_entity_with_hash(entity_hash, &self.burned_original_indices)
-        {
-            // original_entity is a full match, burn this entity + descendants
-            self.burned_original_indices
-                .insert(original_entity.entity_index);
-            self.burned_original_indices
-                .extend(original_entity.descendants.iter().copied());
+            // Diff/reload children
+            let children = self.reload_children(entity, reflector);
 
-            return HotItem::OriginalEntity(original_entity.entity_index);
-        }
+            // Get or create the hot patch for this entity
+            let hot_patch = self.hot_patches.entry(matching_index).or_default();
+            hot_patch.active = true;
 
-        // Check for components match
-        let components_hash = hash(&entity.components);
-        let match_by_components = self
-            .original_bsn
-            .first_entity_with_components_hash(components_hash, &self.burned_original_indices)
-            .map(|original_entity| original_entity.entity_index);
-        if let Some(original_index) = match_by_components {
-            // Found an original entity with exact matching bundle components, burn this entity, but not descendants.
-            self.burned_original_indices.insert(original_index);
-
-            // Diff the children relationship
-            // TODO: Support any relationship
-            let children = entity
-                .children
-                .iter()
-                .map(|child| self.reload_entity(child, reflector))
-                .collect::<Vec<_>>();
-            let original_entity = self
-                .original_bsn
-                .get_entity_by_index(original_index)
-                .expect("entity index mismatch");
-            let relationship_changed = children.len() != original_entity.children.len()
-                || children.iter().zip(original_entity.children.iter()).any(
-                    |(related, original_index)| match related {
-                        HotItem::OriginalEntity(related_index) => *related_index != *original_index,
-                        HotItem::NewEntity(_) => true, // Non original entities means the relationship has changed
-                    },
-                );
-            if relationship_changed {
-                // The children relationship has changed, create or update the hot patch for this entity
-                let hot_patch = self.hot_patches.entry(original_index).or_default();
-                hot_patch.active = true;
+            // Insert children
+            if let Some(children) = children {
                 hot_patch
                     .related
                     .insert(TypeId::of::<Children>(), Arc::new(children));
+            } else {
+                hot_patch.related.remove(&TypeId::of::<Children>());
             }
 
-            return HotItem::OriginalEntity(original_index);
+            return HotItem::OriginalEntity(matching_index);
         }
-
-        // TODO: Check for non-reflectable component/field match to allow patching of partially non-reflectable entities/components
 
         // No match found, create a new hot patch for this entity
         let mut hot_patch = HotPatch {
@@ -430,19 +428,47 @@ impl BsnInvocation {
         };
 
         // Diff/reload children
-        if !entity.children.is_empty() {
-            let children = entity
-                .children
-                .iter()
-                .map(|child| self.reload_entity(child, reflector))
-                .collect();
-
+        if let Some(children) = self.reload_children(entity, reflector) {
             hot_patch
                 .related
                 .insert(TypeId::of::<Children>(), Arc::new(children));
         }
 
         HotItem::NewEntity(hot_patch)
+    }
+
+    fn find_original_match(&self, entity: &BsnEntity) -> Option<usize> {
+        // Check for components match
+        let components_hash = hash(&entity.components);
+        if let Some(original_index) = self
+            .original_bsn
+            .first_entity_with_components_hash(components_hash, &self.burned_original_indices)
+            .map(|original_entity| original_entity.entity_index)
+        {
+            return Some(original_index);
+        }
+
+        // TODO: Check for non-reflectable component/field match to allow patching of partially non-reflectable entities/components
+
+        None
+    }
+
+    fn reload_children(
+        &mut self,
+        entity: &BsnEntity,
+        reflector: &BsnReflector,
+    ) -> Option<Vec<HotItem>> {
+        if entity.children.is_empty() {
+            return None;
+        }
+
+        Some(
+            entity
+                .children
+                .iter()
+                .map(|child| self.reload_entity(child, reflector))
+                .collect(),
+        )
     }
 
     /// Prepares a bsn!-invocation for hot patching.
@@ -466,32 +492,34 @@ impl BsnInvocation {
 
         let entity_index = entity_patch.hot_id.entity_index;
 
-        if let Some(hot_patch) = self.hot_patches.get_mut(&entity_index) {
-            if !hot_patch.active && hot_patch.replace_with.is_none() {
-                return;
-            }
+        let hot_patch = self
+            .hot_patches
+            .get_mut(&entity_index)
+            .ok_or_else(|| {
+                error!("missing hot patch for entity index: {}", entity_index);
+            })
+            .unwrap();
 
-            // Initialize the original bundle info using [`Bundle`] if needed.
-            if hot_patch.needs_original_bundle() {
-                let entity = self
-                    .original_bsn
-                    .get_entity_by_index(entity_index)
-                    .expect("entity index mismatch");
+        // Initialize the original bundle info using [`Bundle`] if needed.
+        if hot_patch.needs_original_bundle() {
+            let entity = self
+                .original_bsn
+                .get_entity_by_index(entity_index)
+                .expect("entity index mismatch");
 
-                let Some(original_bundle) =
-                    OriginalBundle::new::<P::Construct>(&entity.components, world)
-                else {
-                    warn!(
+            let Some(original_bundle) =
+                OriginalBundle::new::<P::Construct>(&entity.components, world)
+            else {
+                warn!(
                     "Some changes could not be hot-reloaded due to unregistered components. Try saving the file again."
                 );
-                    return;
-                };
+                return;
+            };
 
-                hot_patch.original_bundle = Some(Arc::new(original_bundle));
-            }
-
-            entity_patch.hot_patch = Some(hot_patch.clone());
+            hot_patch.original_bundle = Some(Arc::new(original_bundle));
         }
+
+        entity_patch.hot_patch = Some(hot_patch.clone());
     }
 }
 
@@ -557,7 +585,6 @@ impl OriginalBundle {
 
 #[derive(Debug)]
 struct OriginalBsnEntity {
-    hash: u64,
     entity_index: usize,
     components_hash: u64,
     // TODO:
@@ -575,7 +602,6 @@ struct OriginalBsn {
     ///
     /// The indices in this list matches the [`EntityPatchId::entity_index`] output by the `bsn!` macro.
     entities: Vec<OriginalBsnEntity>,
-    hash_to_entity_index: HashMap<u64, Vec<usize>, NoOpHash>,
     components_hash_to_entity_index: HashMap<u64, Vec<usize>, NoOpHash>,
     // /// Relationships between entities, the [`RelationshipType`] matches the type of [`bevy::ecs::relationship::Relationship`].
     // relationship_targets: Vec<Vec<(RelationshipTargetType, Vec<usize>)>>,
@@ -590,19 +616,16 @@ impl From<&BsnAstEntity> for OriginalBsn {
 impl OriginalBsn {
     fn flatten(bsn: Bsn) -> Self {
         let mut flat_entities = Vec::new();
-        let mut hash_to_entity_index = HashMap::with_hasher(NoOpHash);
         let mut components_hash_to_entity_index = HashMap::with_hasher(NoOpHash);
         let mut descendant_stack = Vec::new();
 
         fn recurse(
             entity: BsnEntity,
             flat_entities: &mut Vec<OriginalBsnEntity>,
-            hash_to_entity_index: &mut HashMap<u64, Vec<usize>, NoOpHash>,
             components_hash_to_entity_index: &mut HashMap<u64, Vec<usize>, NoOpHash>,
             descendant_stack: &mut Vec<usize>,
         ) {
             let flat_entity = OriginalBsnEntity {
-                hash: hash(&entity),
                 entity_index: flat_entities.len(),
                 components_hash: hash(&entity.components),
                 components: entity.components,
@@ -613,11 +636,6 @@ impl OriginalBsn {
             };
 
             let entity_index = flat_entity.entity_index;
-
-            hash_to_entity_index
-                .entry(flat_entity.hash)
-                .or_default()
-                .push(entity_index);
 
             components_hash_to_entity_index
                 .entry(flat_entity.components_hash)
@@ -635,7 +653,6 @@ impl OriginalBsn {
                 recurse(
                     child,
                     flat_entities,
-                    hash_to_entity_index,
                     components_hash_to_entity_index,
                     descendant_stack,
                 );
@@ -649,14 +666,12 @@ impl OriginalBsn {
         recurse(
             bsn.root,
             &mut flat_entities,
-            &mut hash_to_entity_index,
             &mut components_hash_to_entity_index,
             &mut descendant_stack,
         );
 
         Self {
             entities: flat_entities,
-            hash_to_entity_index,
             components_hash_to_entity_index,
         }
     }
@@ -665,28 +680,11 @@ impl OriginalBsn {
         self.entities.get(index)
     }
 
-    fn iter_indices_by_hash(&self, hash: u64) -> impl Iterator<Item = usize> + '_ {
-        self.hash_to_entity_index
-            .get(&hash)
-            .into_iter()
-            .flat_map(|v| v.iter().copied())
-    }
-
     fn iter_indices_by_components_hash(&self, hash: u64) -> impl Iterator<Item = usize> + '_ {
         self.components_hash_to_entity_index
             .get(&hash)
             .into_iter()
             .flat_map(|v| v.iter().copied())
-    }
-
-    fn first_entity_with_hash(
-        &self,
-        hash: u64,
-        exclude: &HashSet<usize>,
-    ) -> Option<&OriginalBsnEntity> {
-        self.iter_indices_by_hash(hash)
-            .find(|i| !exclude.contains(i))
-            .map(|i| &self.entities[i])
     }
 
     fn first_entity_with_components_hash(

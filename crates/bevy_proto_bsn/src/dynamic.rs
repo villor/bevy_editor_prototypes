@@ -187,6 +187,14 @@ pub(crate) struct ComponentProps {
     construct: DynamicConstructFn,
 }
 
+impl core::fmt::Debug for ComponentProps {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ComponentProps")
+            .field("type_id", &self.type_id)
+            .finish()
+    }
+}
+
 impl ComponentProps {
     /// Constructs the component using the patches and inserts it onto the context entity.
     pub fn construct(self, context: &mut ConstructContext) -> Result<(), ConstructError> {
@@ -200,7 +208,7 @@ impl ComponentProps {
 }
 
 /// A dynamic scene containing dynamic patches and children.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct DynamicScene {
     /// Maps component type ids to patches to be applied on the props before construction.
     pub(crate) component_props: TypeIdMap<ComponentProps>,

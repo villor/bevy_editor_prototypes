@@ -40,22 +40,23 @@ fn sheep_system(mut commands: Commands, sheep: Query<&Sheep>, root: Single<Entit
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(15.0),
-            right: Val::Px(15.0),
+            right: Val::Px(16.0),
             row_gap: Val::Px(10.0),
             flex_direction: FlexDirection::Column,
         } [
-            (Text("MY TEXT 2")),
-            (Text("MY TEXT BIG"), TextFont { font_size: 50.0 }),
-            (Text("MY TEXT 5")),
+            (Text("MY TEXT")),
+            //(Text("MY TEXT ")),
+            (Text("MY TEXT "), TextFont { font_size: 25.0 }),
+
 
             Node {
                 // padding: UiRect {
                 //     left: Val::Px(10.0),
-                //     right: Val::Px
-                //  TODO: During reflection Default::default() can be omitted for nested types, but not in the EntityPatch...
+                //     right: Val::Px(15.0),
+                //  //TODO: During reflection Default::default() can be omitted for nested types, but not in the EntityPatch...
                 // }
             } [
-                Text("MY TEXT 6"),
+                Text("MY TEXT 7"),
             ],
 
             ( : counter(num_sheep, "sheep")),
@@ -68,8 +69,9 @@ fn sheep_system(mut commands: Commands, sheep: Query<&Sheep>, root: Single<Entit
 // A function that returns an ecs template.
 fn counter(num: usize, name: &'static str) -> impl Scene {
     pbsn! {
+        //Node { padding: UiRect { left: Val::Px(50.0), right: Val::Px(50.0) } } [
         Node [
-            Text("You have ") [
+            Text("You haves ") [
                 TextSpan(format!("{num}")),
                 TextSpan(format!(" {name}!")),
             ],

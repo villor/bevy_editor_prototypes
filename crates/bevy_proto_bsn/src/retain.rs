@@ -19,7 +19,7 @@ pub enum Anchor {
 }
 
 /// An explicit identifier for an entity in a retained scene.
-#[derive(Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct Key(String);
 
 impl<T: Display> From<T> for Key {
@@ -239,7 +239,9 @@ impl RetainChildren for Vec<DynamicScene> {
             // first (before deparenting) so that hooks still see the parent when
             // they run.
             for orphan_id in current_anchors.into_values() {
-                world.entity_mut(orphan_id).despawn();
+                if let Ok(entity) = world.get_entity_mut(orphan_id) {
+                    entity.despawn();
+                }
             }
         });
 
