@@ -1,4 +1,0 @@
-{
-  "editor.tabSize": 4,
-  "rust-analyzer.cargo.features": ["hot_macro"]
-}
