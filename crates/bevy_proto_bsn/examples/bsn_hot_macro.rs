@@ -9,7 +9,7 @@ use bevy_proto_bsn::{Scene, *};
 
 fn main() {
     App::new()
-        .register_hot_reload_source("examples")
+        .register_hot_macro_source("examples")
         .add_plugins(DefaultPlugins)
         .add_plugins(BsnPlugin)
         .add_plugins(sheep_plugin)
@@ -41,10 +41,24 @@ fn sheep_system(mut commands: Commands, sheep: Query<&Sheep>, root: Single<Entit
             position_type: PositionType::Absolute,
             bottom: Val::Px(15.0),
             right: Val::Px(15.0),
-            column_gap: Val::Px(10.0),
+            row_gap: Val::Px(10.0),
+            flex_direction: FlexDirection::Column,
         } [
-            Text("MY TEXT"),
-            ..counter(num_sheep, "sheep"),
+            (Text("MY TEXT 2")),
+            (Text("MY TEXT BIG"), TextFont { font_size: 50.0 }),
+            (Text("MY TEXT 5")),
+
+            Node {
+                // padding: UiRect {
+                //     left: Val::Px(10.0),
+                //     right: Val::Px
+                //  TODO: During reflection Default::default() can be omitted for nested types, but not in the EntityPatch...
+                // }
+            } [
+                Text("MY TEXT 6"),
+            ],
+
+            ( : counter(num_sheep, "sheep")),
         ]
     };
 

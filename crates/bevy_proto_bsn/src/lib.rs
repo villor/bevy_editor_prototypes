@@ -19,8 +19,8 @@ mod prefab;
 mod retain;
 
 /// Hot reload support for BSN macros.
-#[cfg(feature = "hot_reload")]
-pub mod hot_reload;
+#[cfg(feature = "hot_macro")]
+pub mod hot_macro;
 
 use bevy::app::App;
 use bevy::app::Plugin;
@@ -40,8 +40,8 @@ pub use retain::*;
 pub use bevy_proto_bsn_macros::pbsn;
 pub use bevy_proto_bsn_macros::Construct;
 
-#[cfg(feature = "hot_reload")]
-pub use hot_reload::HotReloadApp;
+#[cfg(feature = "hot_macro")]
+pub use hot_macro::HotMacroApp;
 
 /// Adds support for BSN assets and reflection-based dynamic scenes.
 pub struct BsnPlugin;
@@ -54,7 +54,7 @@ impl Plugin for BsnPlugin {
         bsn_reflect_plugin(app);
         prefab_plugin(app);
 
-        #[cfg(feature = "hot_reload")]
-        app.add_plugins(hot_reload::HotReloadPlugin);
+        #[cfg(feature = "hot_macro")]
+        app.add_plugins(hot_macro::HotMacroPlugin);
     }
 }

@@ -1,3 +1,6 @@
+//! This module provides hot-reload support for `bsn!` macro invocations.
+//!
+//! Requires the 'hot_macro' feature flag to be enabled.
 use core::hash::{BuildHasher, Hash};
 use std::ops::DerefMut;
 
@@ -16,47 +19,47 @@ use crate::{DynamicPatch, EntityPatch, Patch, Scene};
 mod rs_file;
 use rs_file::*;
 mod hot_patch;
-pub use hot_patch::{BsnInvocation, HotPatch};
+pub use hot_patch::*;
 mod visit;
 use visit::*;
 
 /// Extension trait for [`App`] to allow registering hot-reload sources.
-pub trait HotReloadApp {
+pub trait HotMacroApp {
     /// Registers a source directory for .rs-files to be hot-reloaded.
-    fn register_hot_reload_source(&mut self, dir: &'static str) -> &mut Self;
+    fn register_hot_macro_source(&mut self, dir: &'static str) -> &mut Self;
 }
 
-impl HotReloadApp for App {
-    fn register_hot_reload_source(&mut self, dir: &'static str) -> &mut Self {
+impl HotMacroApp for App {
+    fn register_hot_macro_source(&mut self, dir: &'static str) -> &mut Self {
         self.register_asset_source(dir, AssetSourceBuilder::platform_default(dir, None))
     }
 }
 
 /// Adds hot-reload support for [`crate::bsn!`] macro invocations.
-pub struct HotReloadPlugin;
+pub struct HotMacroPlugin;
 
-impl Plugin for HotReloadPlugin {
+impl Plugin for HotMacroPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<RsFile>();
         app.init_asset_loader::<RsFileLoader>();
-        app.init_resource::<HotReloadState>();
-        app.add_systems(PreStartup, hot_reload_setup);
-        app.add_systems(Update, (hot_reload_added, hot_reload_modified).chain());
+        app.init_resource::<HotMacroState>();
+        app.add_systems(PreStartup, hot_macro_setup);
+        app.add_systems(Update, (hot_macro_added, hot_macro_modified).chain());
     }
 }
 
 /// Resource holding hot-reload state for `bsn!`-invocations.
 #[derive(Resource, Default)]
-pub struct HotReloadState {
+pub struct HotMacroState {
     /// Handles to source files containing bsn macro invocations.
     handles: HashMap<AssetId<RsFile>, Handle<RsFile>>,
     /// Maps .rs-files to their macro invocations.
     invocation_ids: HashMap<AssetId<RsFile>, Vec<InvocationId>>,
-    /// Invocation info for each hot reloadable bsn!-macro.
+    /// Invocation state for each hot reloadable bsn!-macro.
     invocations: HashMap<InvocationId, BsnInvocation, NoOpHash>,
 }
 
-impl HotReloadState {
+impl HotMacroState {
     /// Adds a [`HotPatch`] if there are any hot reloaded changes.
     ///
     /// See: [`BsnInvocation::init_hot_patch`]
@@ -70,10 +73,8 @@ impl HotReloadState {
         P: Patch + DynamicPatch,
         C: Scene,
     {
-        if let Some(invocation_id) = entity_patch.invocation_id {
-            if let Some(invocation) = self.invocations.get_mut(&invocation_id) {
-                invocation.init_hot_patch(entity_patch, world);
-            }
+        if let Some(invocation) = self.invocations.get_mut(&entity_patch.hot_id.invocation_id) {
+            invocation.init_hot_patch(entity_patch, world);
         }
     }
 }
@@ -95,16 +96,33 @@ impl InvocationId {
     }
 }
 
+/// Identifies a specific entity patch in a `bsn!`-macro invocation in the _original_ source files.
+#[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
+pub struct EntityPatchId {
+    invocation_id: InvocationId,
+    entity_index: usize,
+}
+
+impl EntityPatchId {
+    /// Creates a new [`EntityPatchId`]
+    pub fn new(path: &str, line: u32, column: u32, index: usize) -> Self {
+        Self {
+            invocation_id: InvocationId::new(path, line, column),
+            entity_index: index,
+        }
+    }
+}
+
 /// Initializes the hot-reload state by loading the source files as assets.
-fn hot_reload_setup(mut state: ResMut<HotReloadState>, asset_server: Res<AssetServer>) {
+fn hot_macro_setup(mut state: ResMut<HotMacroState>, asset_server: Res<AssetServer>) {
     // TODO: Actually use the non-hardcoded, configured sources
-    let handle = asset_server.load::<RsFile>("examples://bsn_macro_hot_reload.rs");
+    let handle = asset_server.load::<RsFile>("examples://bsn_hot_macro.rs");
     state.handles.insert(handle.id(), handle);
 }
 
 /// Initializes the state for loaded .rs-files.
-fn hot_reload_added(
-    mut state: ResMut<HotReloadState>,
+fn hot_macro_added(
+    mut state: ResMut<HotMacroState>,
     assets: Res<Assets<RsFile>>,
     mut event_reader: EventReader<AssetEvent<RsFile>>,
 ) {
@@ -160,10 +178,11 @@ fn hot_reload_added(
 }
 
 /// Performs hot-reload of macro invocations in modified .rs-files.
-fn hot_reload_modified(
-    mut state: ResMut<HotReloadState>,
+fn hot_macro_modified(
+    mut state: ResMut<HotMacroState>,
     assets: Res<Assets<RsFile>>,
     mut event_reader: EventReader<AssetEvent<RsFile>>,
+    app_registry: Res<AppTypeRegistry>,
 ) {
     for event in event_reader.read() {
         if let AssetEvent::Modified { id } = event {
@@ -179,7 +198,7 @@ fn hot_reload_modified(
             };
             let macro_invocations = visit_and_collect_macros(&ast);
 
-            let HotReloadState {
+            let HotMacroState {
                 handles,
                 invocation_ids,
                 invocations,
@@ -209,7 +228,8 @@ fn hot_reload_modified(
                 };
 
                 // Reload the changes
-                if let Err(e) = bsn_invocation.reload_invocation(invocation) {
+                let registry = app_registry.read();
+                if let Err(e) = bsn_invocation.reload_invocation(invocation, &registry) {
                     warn!(
                         "Failed to parse hot-reloaded bsn! in {:?}: {}",
                         file.path, e

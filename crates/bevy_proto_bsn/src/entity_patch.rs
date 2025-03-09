@@ -38,7 +38,7 @@ pub trait Scene: Sized + DynamicPatch {
     }
 
     /// Prepares the hot-reload state for this scene.
-    #[cfg(feature = "hot_reload")]
+    #[cfg(feature = "hot_macro")]
     fn init_hot_patch(&mut self, _world: &mut World) {}
 }
 
@@ -71,7 +71,7 @@ impl<S: Scene + DynamicPatch> Scene for Vec<S> {
         Ok(())
     }
 
-    #[cfg(feature = "hot_reload")]
+    #[cfg(feature = "hot_macro")]
     fn init_hot_patch(&mut self, world: &mut World) {
         for scene in self.iter_mut() {
             scene.init_hot_patch(world);
@@ -101,7 +101,7 @@ macro_rules! impl_scene_tuple {
                 Ok(())
             }
 
-            #[cfg(feature = "hot_reload")]
+            #[cfg(feature = "hot_macro")]
             fn init_hot_patch(&mut self, world: &mut World) {
                 let ($($s,)*) = self;
                 $($s.init_hot_patch(world);)*
@@ -139,15 +139,12 @@ where
     /// Optional key used for retaining.
     pub key: Option<Key>,
 
-    /// Invocation id for hot-reload.
-    #[cfg(feature = "hot_reload")]
-    pub invocation_id: Option<crate::hot_reload::InvocationId>,
-    /// Index within the template
-    #[cfg(feature = "hot_reload")]
-    pub entity_index: usize,
+    /// Identification for hot-reload.
+    #[cfg(feature = "hot_macro")]
+    pub hot_id: crate::hot_macro::EntityPatchId,
     /// Hot patch to be applied during dynamic patch.
-    #[cfg(feature = "hot_reload")]
-    pub hot_patch: Option<crate::hot_reload::HotPatch>,
+    #[cfg(feature = "hot_macro")]
+    pub hot_patch: Option<crate::hot_macro::HotPatch>,
 }
 
 impl<I, P, C> Scene for EntityPatch<I, P, C>
@@ -167,7 +164,7 @@ where
     ) -> Result<(), ConstructError> {
         let construct_dynamically = !self.inherit.root_count() > 0;
 
-        #[cfg(feature = "hot_reload")]
+        #[cfg(feature = "hot_macro")]
         let construct_dynamically = {
             self.init_hot_patch(context.world);
             construct_dynamically || self.hot_patch.is_some()
@@ -198,7 +195,7 @@ where
         Ok(())
     }
 
-    #[cfg(feature = "hot_reload")]
+    #[cfg(feature = "hot_macro")]
     #[inline]
     fn init_hot_patch(&mut self, world: &mut World) {
         use bevy::ecs::world::Mut;
@@ -207,9 +204,9 @@ where
         self.inherit.init_hot_patch(world);
         self.children.init_hot_patch(world);
 
-        // Initialize hot patch for this entity
+        // Initialize hot patch for this entity patch
         world.resource_scope(
-            |world: &mut World, mut state: Mut<crate::hot_reload::HotReloadState>| {
+            |world: &mut World, mut state: Mut<crate::hot_macro::HotMacroState>| {
                 state.init_hot_patch(self, world);
             },
         );
@@ -222,10 +219,10 @@ where
     P: Patch + DynamicPatch,
     C: Scene,
 {
-    fn dynamic_patch(self, scene: &mut DynamicScene) {
-        #[cfg(feature = "hot_reload")]
-        if let Some(hot_patch) = self.hot_patch {
-            hot_patch.hot_hook_entity_patch(self.inherit, self.patch, self.children, scene);
+    fn dynamic_patch(mut self, scene: &mut DynamicScene) {
+        #[cfg(feature = "hot_macro")]
+        if let Some(hot_patch) = self.hot_patch.take() {
+            hot_patch.dynamic_patch_override(self, scene);
             return;
         }
 
@@ -234,6 +231,10 @@ where
 
         // Apply this patch itself
         self.patch.dynamic_patch(scene);
+        #[cfg(feature = "hot_macro")]
+        {
+            scene.hot_id = Some(self.hot_id);
+        }
 
         // Push the children
         self.children.dynamic_patch_as_children(scene);

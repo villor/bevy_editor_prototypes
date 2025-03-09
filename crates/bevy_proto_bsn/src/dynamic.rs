@@ -35,6 +35,18 @@ pub trait DynamicPatch: Sized + Send + Sync + 'static {
         let child_scene = self.into_dynamic_scene();
         parent_scene.push_child(child_scene);
     }
+
+    /// Calls `get_dynamic_scene` for every discrete patch in self to get a [`DynamicScene`],
+    /// then patches it with the discrete patch, and calls `post_patch` with the patched [`DynamicScene`].
+    fn dynamic_patch_discrete(
+        self,
+        get_dynamic_scene: &mut impl FnMut() -> DynamicScene,
+        post_patch: &mut impl FnMut(DynamicScene),
+    ) {
+        let mut dynamic_scene = get_dynamic_scene();
+        self.dynamic_patch(&mut dynamic_scene);
+        post_patch(dynamic_scene);
+    }
 }
 
 // Tuple impls
@@ -50,6 +62,15 @@ macro_rules! impl_patch_for_tuple {
             fn dynamic_patch_as_children(self, _parent_scene: &mut DynamicScene) {
                 let ($($t,)*) = self;
                 $($t.dynamic_patch_as_children(_parent_scene);)*
+            }
+
+            fn dynamic_patch_discrete(
+                self,
+                _get_dynamic_scene: &mut impl FnMut() -> DynamicScene,
+                _post_patch: &mut impl FnMut(DynamicScene),
+            ) {
+                let ($($t,)*) = self;
+                $($t.dynamic_patch_discrete(_get_dynamic_scene, _post_patch);)*
             }
         }
     };
@@ -74,6 +95,16 @@ impl<D: DynamicPatch> DynamicPatch for Vec<D> {
     fn dynamic_patch_as_children(self, parent_scene: &mut DynamicScene) {
         for scene in self {
             scene.dynamic_patch_as_children(parent_scene);
+        }
+    }
+
+    fn dynamic_patch_discrete(
+        self,
+        get_dynamic_scene: &mut impl FnMut() -> DynamicScene,
+        post_patch: &mut impl FnMut(DynamicScene),
+    ) {
+        for scene in self {
+            scene.dynamic_patch_discrete(get_dynamic_scene, post_patch);
         }
     }
 }
@@ -177,6 +208,16 @@ pub struct DynamicScene {
     pub(crate) children: Vec<DynamicScene>,
     /// Optional key used for retaining.
     key: Option<Key>,
+
+    /// Identification for hot-reload.
+    #[cfg(feature = "hot_macro")]
+    pub(crate) hot_id: Option<crate::hot_macro::EntityPatchId>,
+    /// Deferred map of original descendant scenes,
+    /// used for hot-reloading to allow the whole entity patch tree to be statically resolved before mapping the relationships.
+    #[cfg(feature = "hot_macro")]
+    pub(crate) hot_deferred: Option<crate::hot_macro::HotDeferred>,
+    /// Changed relationships
+    pub(crate) hot_related: Option<crate::hot_macro::HotRelated>,
 }
 
 impl DynamicScene {

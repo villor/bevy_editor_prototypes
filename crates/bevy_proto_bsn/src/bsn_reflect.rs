@@ -69,7 +69,13 @@ impl ReflectedBsn {
         let component_patches = bsn
             .components
             .iter()
-            .map(|component| reflector.reflect_component_patch(component))
+            .map(|component| {
+                let component_patch = reflector.reflect_component_patch(component)?;
+                if let Some(field_err) = component_patch.skipped_fields.first() {
+                    return Err(field_err.clone());
+                }
+                Ok(component_patch)
+            })
             .collect::<Result<_, _>>()?;
 
         let children = bsn

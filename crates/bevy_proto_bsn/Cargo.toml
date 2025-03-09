@@ -5,8 +5,8 @@ edition = "2021"
 
 [features]
 default = []
-hot_reload = [
-    'bevy_proto_bsn_macros/hot_reload',
+hot_macro = [
+    'bevy_proto_bsn_macros/hot_macro',
     'bevy_proto_bsn_ast/visit',
     'bevy_proto_bsn_ast/hash',
     'bevy/file_watcher',
@@ -25,5 +25,5 @@ variadics_please = { workspace = true }
 workspace = true
 
 [[example]]
-name = "bsn_macro_hot_reload"
-required-features = ["hot_reload"]
+name = "bsn_hot_macro"
+required-features = ["hot_macro"]

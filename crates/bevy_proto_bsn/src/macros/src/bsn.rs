@@ -77,7 +77,7 @@ fn bsn_ast_entity_to_tokens(
 
     let key = entity.key.to_token_stream();
 
-    #[cfg(not(feature = "hot_reload"))]
+    #[cfg(not(feature = "hot_macro"))]
     let output = quote! {
         #bevy_proto_bsn::EntityPatch {
             inherit: (#(#inherits,)*),
@@ -87,7 +87,7 @@ fn bsn_ast_entity_to_tokens(
         }
     };
 
-    #[cfg(feature = "hot_reload")]
+    #[cfg(feature = "hot_macro")]
     let output = {
         quote! {
             #bevy_proto_bsn::EntityPatch {
@@ -95,12 +95,12 @@ fn bsn_ast_entity_to_tokens(
                 patch: #patch,
                 children: (#(#children,)*),
                 key: #key,
-                invocation_id: Some(#bevy_proto_bsn::hot_reload::InvocationId::new(
+                hot_id: #bevy_proto_bsn::hot_macro::EntityPatchId::new(
                     file!(),
                     line!(),
                     column!(),
-                )),
-                entity_index: #my_entity_index,
+                    #my_entity_index
+                ),
                 hot_patch: None,
             }
         }
