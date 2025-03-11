@@ -587,12 +587,9 @@ impl OriginalBundle {
 struct OriginalBsnEntity {
     entity_index: usize,
     components_hash: u64,
-    // TODO:
-    // skipped_components_hash: u64,
     components: Vec<BsnComponent>,
     children: Vec<usize>,
     descendants: Vec<usize>,
-    // key: Option<BsnKey>,
 }
 
 /// A flattened [`Bsn`] tree.
@@ -603,8 +600,6 @@ struct OriginalBsn {
     /// The indices in this list matches the [`EntityPatchId::entity_index`] output by the `bsn!` macro.
     entities: Vec<OriginalBsnEntity>,
     components_hash_to_entity_index: HashMap<u64, Vec<usize>, NoOpHash>,
-    // /// Relationships between entities, the [`RelationshipType`] matches the type of [`bevy::ecs::relationship::Relationship`].
-    // relationship_targets: Vec<Vec<(RelationshipTargetType, Vec<usize>)>>,
 }
 
 impl From<&BsnAstEntity> for OriginalBsn {
@@ -629,10 +624,8 @@ impl OriginalBsn {
                 entity_index: flat_entities.len(),
                 components_hash: hash(&entity.components),
                 components: entity.components,
-                //children_hash: hash(&entity.children),
                 children: Vec::new(),
                 descendants: Vec::new(),
-                //key: entity.key,
             };
 
             let entity_index = flat_entity.entity_index;
