@@ -3,7 +3,10 @@
 //! An all-in-one numerical ruminant package.
 //!
 //! This example is originally from `i-cant-believe-its-not-bsn` and shows the differences between using `pbsn!` and `template!`.
-use bevy::{color::palettes::css, prelude::*};
+use bevy::{
+    color::palettes::css::{GREEN, RED},
+    prelude::*,
+};
 
 use bevy_proto_bsn::{Scene, *};
 
@@ -45,9 +48,9 @@ fn sheep_system(mut commands: Commands, sheep: Query<&Sheep>, root: Single<Entit
             flex_direction: FlexDirection::Column,
         } [
             (Text("MY TEXT")),
-            //(Text("MY TEXT ")),
-            (Text("MY TEXT "), TextFont { font_size: 25.0 }),
 
+            //(Text("MY TEXT ")),
+            (Text("Testing"), TextFont { font_size: 80.0 }),
 
             Node {
                 // padding: UiRect {
@@ -56,7 +59,7 @@ fn sheep_system(mut commands: Commands, sheep: Query<&Sheep>, root: Single<Entit
                 //  //TODO: During reflection Default::default() can be omitted for nested types, but not in the EntityPatch...
                 // }
             } [
-                Text("MY TEXT 7"),
+                Text("MY TEXT 7s"),
             ],
 
             ( : counter(num_sheep, "sheep")),
@@ -71,34 +74,34 @@ fn counter(num: usize, name: &'static str) -> impl Scene {
     pbsn! {
         //Node { padding: UiRect { left: Val::Px(50.0), right: Val::Px(50.0) } } [
         Node [
-            Text("You haves ") [
+            Text("You have ") [
                 TextSpan(format!("{num}")),
                 TextSpan(format!(" {name}!")),
             ],
             (
                 Button,
                 Text("Increase"),
-                TextColor(css::GREEN),
-                {visible_if(num < 100)}
+                TextColor(GREEN),
+                visible_if(num < 100)
             ) [
                 // Observes parent entity.
-                On(|_: Trigger<Pointer<Released>>, mut commands: Commands| {
-                    commands.spawn(Sheep);
-                })
+                // On(|_: Trigger<Pointer<Released>>, mut commands: Commands| {
+                //     commands.spawn(Sheep);
+                // })
             ],
             (
-                {Name::new("DecreaseButton")},
+                Name::new("DecreaseButton"),
                 Button,
                 Text("Decrease"),
-                TextColor(css::RED),
-                {visible_if(num > 0)},
+                TextColor(RED),
+                visible_if(num > 0),
             ),
             // Observes named entity "DecreaseButton"
-            On(|_: Trigger<Pointer<Released>>, sheep: Query<Entity, With<Sheep>>, mut commands: Commands| {
-                if let Some(sheep) = sheep.iter().next() {
-                    commands.entity(sheep).despawn();
-                }
-            }, @"DecreaseButton"),
+            // On(|_: Trigger<Pointer<Released>>, sheep: Query<Entity, With<Sheep>>, mut commands: Commands| {
+            //     if let Some(sheep) = sheep.iter().next() {
+            //         commands.entity(sheep).despawn();
+            //     }
+            // }, @"DecreaseButton"),
         ]
     }
 }

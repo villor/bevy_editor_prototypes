@@ -74,9 +74,9 @@ fn handle_edit_operations(
             .iter()
             .enumerate()
             .find_map(|(i, c)| match c {
-                BsnComponent::Patch(path, props) if path == "Counter" => match props {
-                    BsnProps::TupleLike(props) => match props.first() {
-                        Some(BsnProp::Value(BsnValue::Number(value))) => {
+                BsnComponent::StructPatch(path, props) if path == "Counter" => match props {
+                    BsnStruct::TupleLike(props) => match props.first() {
+                        Some(BsnValue::Number(value)) => {
                             Some((Some(i), Counter(value.parse::<i32>().unwrap())))
                         }
                         _ => None,
@@ -92,11 +92,9 @@ fn handle_edit_operations(
         }
 
         let new_value = prev_counter.0 + 1;
-        bsn.root.components.push(BsnComponent::Patch(
+        bsn.root.components.push(BsnComponent::StructPatch(
             "Counter".to_string(),
-            BsnProps::TupleLike(vec![BsnProp::Value(BsnValue::Number(
-                new_value.to_string(),
-            ))]),
+            BsnStruct::TupleLike(vec![BsnValue::Number(new_value.to_string())]),
         ));
 
         info!("Incremented from {} to {}", prev_counter.0, new_value);

@@ -225,6 +225,7 @@ pub struct DynamicScene {
     #[cfg(feature = "hot_macro")]
     pub(crate) hot_deferred: Option<crate::hot_macro::HotDeferred>,
     /// Changed relationships
+    #[cfg(feature = "hot_macro")]
     pub(crate) hot_related: Option<crate::hot_macro::HotRelated>,
 }
 

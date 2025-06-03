@@ -13,6 +13,49 @@ fn main() {
         .run();
 }
 
+// A little trick to get around the limitation of not being able to use consts with full/partial paths.
+// Consts are only supported for single idents, or in braced expressions.
+trait BorderRadiusConstExt {
+    fn max() -> Self;
+}
+
+impl BorderRadiusConstExt for BorderRadius {
+    #[inline]
+    fn max() -> Self {
+        Self::MAX
+    }
+}
+
+#[derive(Clone, Component, Reflect)]
+enum EnumStruct {
+    MyStructVariant {
+        field1: f32,
+        field2: f32,
+        field3: Vec3,
+    },
+}
+
+impl Default for EnumStruct {
+    fn default() -> Self {
+        Self::MyStructVariant {
+            field1: 0.0,
+            field2: 0.0,
+            field3: Vec3::ZERO,
+        }
+    }
+}
+
+#[derive(Clone, Component, Reflect)]
+enum EnumTuple {
+    MyTupleVariant(f32, Vec3),
+}
+
+impl Default for EnumTuple {
+    fn default() -> Self {
+        Self::MyTupleVariant(0.0, Vec3::ZERO)
+    }
+}
+
 fn ui() -> impl Scene {
     pbsn! {
         Node {
@@ -23,7 +66,11 @@ fn ui() -> impl Scene {
             flex_direction: FlexDirection::Column,
             row_gap: px(5.0),
         } [
-            (Node, {Name::new("BasicButton")}, :button("Basic")),
+            Transform {
+                translation: { x: 5.9 },
+            },
+            Visibility,
+            (Node, Name::new("BasicButton"), :button("Basic")),
             (Node, :button("Rounded"), rounded),
             (Node { border: px_all(5.0) }, BorderColor(RED_500) :button("Thick red"), rounded),
             (Node, :button("Merged children"), rounded) [(
@@ -32,7 +79,7 @@ fn ui() -> impl Scene {
                     height: px(30.0),
                 },
                 BackgroundColor(BLUE_500),
-                {BorderRadius::MAX}
+                BorderRadius::max(),
             )],
 
             (:button("Click me!")) [
@@ -62,12 +109,12 @@ fn button(text: &'static str) -> impl Scene {
         BorderColor(LIME_800),
         BackgroundColor(LIME_500)
     ) [
-        ({Text::new(text)}, ConstructTextFont { font: @"Inter-Regular.ttf" })
+        (Text::new(text), ConstructTextFont { font: @"Inter-Regular.ttf" })
     ]}
 }
 
 fn rounded() -> impl Scene {
     pbsn! {(
-        {BorderRadius::all(px(10.0))}
+        BorderRadius::all(px(10.0))
     )}
 }

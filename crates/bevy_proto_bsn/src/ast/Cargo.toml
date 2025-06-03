@@ -22,6 +22,7 @@ syn = { version = "2.0", default-features = false, features = [
     "full",
 ] }
 quote = { version = "1.0", default-features = false }
+inflections = { version = "1" }
 
 [lints]
 workspace = true

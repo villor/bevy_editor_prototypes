@@ -1,5 +1,5 @@
 use bevy::prelude::{
-    ChildSpawnerCommands, Commands, EntityCommand, EntityCommands, EntityWorldMut, World,
+    ChildSpawnerCommands, Commands, EntityCommand, EntityCommands, EntityWorldMut,
 };
 use variadics_please::all_tuples_with_size;
 
@@ -39,7 +39,7 @@ pub trait Scene: Sized + DynamicPatch {
 
     /// Prepares this scene for `hot_macro` patching.
     #[cfg(feature = "hot_macro")]
-    fn init_hot_patch(&mut self, _world: &mut World) {}
+    fn init_hot_patch(&mut self, _world: &mut bevy::prelude::World) {}
 }
 
 impl Scene for () {
@@ -72,7 +72,7 @@ impl<S: Scene + DynamicPatch> Scene for Vec<S> {
     }
 
     #[cfg(feature = "hot_macro")]
-    fn init_hot_patch(&mut self, world: &mut World) {
+    fn init_hot_patch(&mut self, world: &mut bevy::prelude::World) {
         for scene in self.iter_mut() {
             scene.init_hot_patch(world);
         }
@@ -102,7 +102,7 @@ macro_rules! impl_scene_tuple {
             }
 
             #[cfg(feature = "hot_macro")]
-            fn init_hot_patch(&mut self, world: &mut World) {
+            fn init_hot_patch(&mut self, world: &mut bevy::prelude::World) {
                 let ($($s,)*) = self;
                 $($s.init_hot_patch(world);)*
             }
@@ -197,7 +197,7 @@ where
 
     #[cfg(feature = "hot_macro")]
     #[inline]
-    fn init_hot_patch(&mut self, world: &mut World) {
+    fn init_hot_patch(&mut self, world: &mut bevy::prelude::World) {
         use bevy::ecs::world::Mut;
 
         // Recursively initialize hot patches for inherits and descendants
@@ -206,7 +206,7 @@ where
 
         // Initialize hot patch for this entity patch
         world.resource_scope(
-            |world: &mut World, mut state: Mut<crate::hot_macro::HotMacroState>| {
+            |world: &mut bevy::prelude::World, mut state: Mut<crate::hot_macro::HotMacroState>| {
                 state.init_hot_patch(self, world);
             },
         );
@@ -219,7 +219,7 @@ where
     P: Patch + DynamicPatch,
     C: Scene,
 {
-    fn dynamic_patch(mut self, scene: &mut DynamicScene) {
+    fn dynamic_patch(#[allow(unused_mut)] mut self, scene: &mut DynamicScene) {
         #[cfg(feature = "hot_macro")]
         if let Some(hot_patch) = self.hot_patch.take() {
             hot_patch.dynamic_patch_override(self, scene);

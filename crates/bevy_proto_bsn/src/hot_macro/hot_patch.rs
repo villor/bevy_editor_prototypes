@@ -25,7 +25,7 @@ use super::{hash, EntityPatchId};
 /// The bundle/component part of a hot patch.
 #[derive(Debug, Clone)]
 struct HotBundlePatch {
-    component_patches: Arc<TypeIdMap<Box<dyn PartialReflect>>>,
+    component_patches: Arc<TypeIdMap<Option<Box<dyn PartialReflect>>>>,
     removed_components: Arc<HashSet<TypeId, NoOpHash>>,
 }
 
@@ -38,7 +38,7 @@ impl HotBundlePatch {
                     .filter_map(|bsn_component| {
                         reflector
                             .reflect_component_patch(bsn_component)
-                            .map(|reflected| (reflected.type_id, reflected.props.instance))
+                            .map(|reflected| (reflected.type_id, reflected.props.map(|p| p.instance)))
                             .map_err(|err| {
                                 warn!("Failed to reflect component, skipping hot reload for this component: {}", err);
                             })
@@ -77,7 +77,8 @@ impl HotBundlePatch {
                         warn!("Skipping non-reflectable field: {}", field_err);
                     }
 
-                    component_patches.insert(reflected.type_id, reflected.props.instance);
+                    component_patches
+                        .insert(reflected.type_id, reflected.props.map(|p| p.instance));
                     keep_components.insert(reflected.type_id);
                 }
                 Err(err) => {
@@ -105,10 +106,14 @@ impl HotBundlePatch {
 impl DynamicPatch for HotBundlePatch {
     fn dynamic_patch(self, scene: &mut DynamicScene) {
         for (type_id, patch) in self.component_patches.iter() {
-            let patch = patch.clone_value();
-            scene.patch_reflected(*type_id, move |props: &mut dyn PartialReflect| {
-                props.apply(patch.as_ref());
-            });
+            if let Some(patch) = patch {
+                let patch = patch.clone_value();
+                scene.patch_reflected(*type_id, move |props: &mut dyn PartialReflect| {
+                    props.apply(patch.as_ref());
+                });
+            } else {
+                scene.patch_reflected(*type_id, |_: &mut dyn PartialReflect| {});
+            }
         }
         for type_id in self.removed_components.iter() {
             scene.remove_component(*type_id);

@@ -17,7 +17,7 @@ use bevy::{
 use thiserror::Error;
 
 use crate::{
-    Bsn, BsnComponent, BsnEntity, BsnKey, BsnLoader, BsnLoaderError, BsnProp, BsnProps, BsnValue,
+    Bsn, BsnComponent, BsnEntity, BsnKey, BsnLoader, BsnLoaderError, BsnStruct, BsnValue,
     DynamicPatch, DynamicScene, ReflectConstruct,
 };
 
@@ -96,9 +96,13 @@ impl ReflectedBsn {
 impl DynamicPatch for ReflectedBsn {
     fn dynamic_patch(self, scene: &mut DynamicScene) {
         for patch in self.component_patches {
-            scene.patch_reflected(patch.type_id, move |props: &mut dyn PartialReflect| {
-                props.apply(patch.props.instance.as_ref());
-            });
+            if let Some(props) = patch.props {
+                scene.patch_reflected(patch.type_id, move |p: &mut dyn PartialReflect| {
+                    p.apply(props.instance.as_ref());
+                });
+            } else {
+                scene.patch_reflected(patch.type_id, move |_: &mut dyn PartialReflect| {});
+            }
         }
 
         self.children.dynamic_patch_as_children(scene);
@@ -232,7 +236,7 @@ pub struct ReflectedComponentPatch {
     /// The type id of the component.
     pub type_id: TypeId,
     /// The patch to be applied to the component props.
-    pub props: ReflectedValue,
+    pub props: Option<ReflectedValue>,
     /// List of [`ReflectError`]'s for fields that were skipped.
     pub skipped_fields: Vec<ReflectError>,
 }
@@ -286,6 +290,34 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         }
     }
 
+    /// Try to resolve the props type for a construct type.
+    pub fn try_resolve_props_type(
+        &self,
+        construct_type_id: TypeId,
+    ) -> ReflectResult<&TypeRegistration> {
+        let Some(construct_type) = self.registry.get(construct_type_id) else {
+            return Err(ReflectError::UnknownType(format!(
+                "Construct type with id: {:?}",
+                construct_type_id
+            )));
+        };
+        let Some(reflect_construct) = construct_type.data::<ReflectConstruct>() else {
+            return Err(ReflectError::MissingTypeData(
+                "ReflectConstruct".into(),
+                construct_type.type_info().type_path().into(),
+            ));
+        };
+
+        let Some(props_type) = self.registry.get(reflect_construct.props_type) else {
+            return Err(ReflectError::UnknownType(format!(
+                "props for {}",
+                construct_type.type_info().type_path(),
+            )));
+        };
+
+        Ok(props_type)
+    }
+
     /// Try to resolve a type info by its path.
     pub fn try_resolve_type_info(&self, type_path: &str) -> ReflectResult<&TypeInfo> {
         Ok(self.try_resolve_type(type_path)?.type_info())
@@ -310,12 +342,17 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
                 return Err(field_err.clone());
             }
 
-            dynamic_scene.patch_reflected(
-                patch_data.type_id,
-                move |props: &mut dyn PartialReflect| {
-                    props.apply(patch_data.props.instance.as_ref());
-                },
-            );
+            if let Some(patch) = patch_data.props {
+                dynamic_scene.patch_reflected(
+                    patch_data.type_id,
+                    move |props: &mut dyn PartialReflect| {
+                        props.apply(patch.instance.as_ref());
+                    },
+                );
+            } else {
+                dynamic_scene
+                    .patch_reflected(patch_data.type_id, move |_: &mut dyn PartialReflect| {});
+            }
         }
 
         // Add children
@@ -333,40 +370,32 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         component: &BsnComponent,
     ) -> ReflectResult<ReflectedComponentPatch> {
         match component {
-            BsnComponent::Patch(path, props) => {
+            BsnComponent::StructPatch(path, struct_patch) => {
                 let component_type = self.try_resolve_type(path)?;
-                let Some(reflect_construct) = component_type.data::<ReflectConstruct>() else {
-                    return Err(ReflectError::MissingTypeData(
-                        "ReflectConstruct".into(),
-                        path.into(),
-                    ));
-                };
+                let props_type = self.try_resolve_props_type(component_type.type_id())?;
 
-                let Some(props_type) = self.registry.get(reflect_construct.props_type) else {
-                    return Err(ReflectError::UnknownType(format!("props for {}", path)));
-                };
-
-                let mut skipped_fields = Vec::new();
-                let props = match props {
-                    BsnProps::None => self.reflect_path(path, Some(props_type.type_info()))?,
-                    BsnProps::StructLike(props) => self.reflect_struct_like(
-                        path,
-                        props,
-                        |prop, type_info, skipped_fields| {
-                            self.reflect_prop_value(prop, type_info, skipped_fields)
-                        },
-                        props_type.type_info(),
-                        &mut skipped_fields,
-                    )?,
-                    BsnProps::TupleLike(props) => self.reflect_call_like(
-                        path,
-                        props,
-                        |prop, type_info, skipped_fields| {
-                            self.reflect_prop_value(prop, type_info, skipped_fields)
-                        },
-                        props_type.type_info(),
-                        &mut skipped_fields,
-                    )?,
+                let (props, skipped_fields) = match struct_patch {
+                    BsnStruct::Unit => (None, Vec::new()),
+                    BsnStruct::Named(fields) => {
+                        let mut skipped_fields = Vec::new();
+                        let props = self.reflect_struct_like(
+                            Some(path),
+                            fields,
+                            props_type.type_info(),
+                            &mut skipped_fields,
+                        )?;
+                        (Some(props), skipped_fields)
+                    }
+                    BsnStruct::TupleLike(fields) => {
+                        let mut skipped_fields = Vec::new();
+                        let props = self.reflect_call_like(
+                            path,
+                            fields.iter().collect::<Vec<_>>(),
+                            props_type.type_info(),
+                            &mut skipped_fields,
+                        )?;
+                        (Some(props), skipped_fields)
+                    }
                 };
 
                 Ok(ReflectedComponentPatch {
@@ -375,6 +404,20 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
                     skipped_fields,
                 })
             }
+            BsnComponent::EnumPatch(path, enum_patch) => {
+                let component_type = self.try_resolve_type(path)?;
+                let props_type = self.try_resolve_props_type(component_type.type_id())?;
+
+                // TODO: Ensure no variant works on the _component level_
+
+                todo!()
+            }
+            BsnComponent::TypedExpr(path, expr) => Err(ReflectError::ExpressionNotSupported(
+                format!("{}@{}", path, expr),
+            )),
+            BsnComponent::InferredExpr(expr) => {
+                Err(ReflectError::ExpressionNotSupported(expr.into()))
+            }
             BsnComponent::BracedExpr(expr) => Err(ReflectError::ExpressionNotSupported(format!(
                 "{{{}}}",
                 expr
@@ -382,66 +425,31 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         }
     }
 
-    fn reflect_prop_value(
+    fn reflect_component_props_patch(
         &self,
-        prop: &BsnProp,
+        path: &String,
         ty: &TypeInfo,
-        skipped_fields: &mut Vec<ReflectError>,
-    ) -> ReflectResult<Box<dyn PartialReflect>> {
-        // HACK: Allows constructing Handles from asset paths in BSN assets by triggering loads during reflection.
-        // This should be removed when we have an upstream Construct implementation for Handle.
-        if ty.type_path().starts_with("bevy_asset::handle::Handle<") && self.asset_loader.is_some()
-        {
-            if let BsnProp::Props(BsnValue::String(asset_path)) = prop {
-                let Some(reflect_handle_load) = self
-                    .registry
-                    .get_type_data::<ReflectHandleLoad>(ty.type_id())
-                else {
-                    return Err(ReflectError::MissingTypeData(
-                        "ReflectHandleLoad".into(),
-                        ty.type_path().into(),
-                    ));
-                };
-                let handle =
-                    reflect_handle_load.load(asset_path, self.asset_loader.as_ref().unwrap());
-                return Ok(handle.into_partial_reflect());
+        struct_patch: &BsnStruct,
+    ) -> ReflectResult<(Option<ReflectedValue>, Vec<ReflectError>)> {
+        Ok(match struct_patch {
+            BsnStruct::Unit => (None, Vec::new()),
+            BsnStruct::Named(fields) => {
+                let mut skipped_fields = Vec::new();
+                let props =
+                    self.reflect_struct_like(Some(path), fields, ty, &mut skipped_fields)?;
+                (Some(props), skipped_fields)
             }
-        }
-
-        // This is fine : )
-        if ty
-            .type_path()
-            .starts_with("bevy_proto_bsn::construct::ConstructProp<")
-        {
-            let generic = ty.generics().get_named("T").unwrap();
-            let generic_ty = self.registry.get(generic.type_id()).unwrap();
-
-            let Some(reflect_construct) = generic_ty.data::<ReflectConstruct>() else {
-                return Err(ReflectError::MissingTypeData(
-                    "ReflectConstruct".into(),
-                    generic_ty.type_info().type_path().into(),
-                ));
-            };
-
-            let Some(props_type) = self.registry.get(reflect_construct.props_type) else {
-                return Err(ReflectError::UnknownType(format!(
-                    "props for {}",
-                    generic_ty.type_info().type_path()
-                )));
-            };
-
-            let val = self.reflect_value(prop.value(), props_type.type_info(), skipped_fields)?;
-            let mut dynamic_tuple = DynamicTuple::default();
-            dynamic_tuple.insert_boxed(val.instance.into_partial_reflect());
-            Ok(Box::new(DynamicEnum::new(
-                prop.variant_name(),
-                DynamicVariant::Tuple(dynamic_tuple),
-            )))
-        } else {
-            Ok(self
-                .reflect_value(prop.value(), ty, skipped_fields)?
-                .instance)
-        }
+            BsnStruct::TupleLike(fields) => {
+                let mut skipped_fields = Vec::new();
+                let props = self.reflect_call_like(
+                    path,
+                    fields.iter().collect::<Vec<_>>(),
+                    ty,
+                    &mut skipped_fields,
+                )?;
+                (Some(props), skipped_fields)
+            }
+        })
     }
 
     fn reflect_value(
@@ -450,9 +458,55 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         ty: &TypeInfo,
         skipped_fields: &mut Vec<ReflectError>,
     ) -> ReflectResult<ReflectedValue> {
+        // HACK: Allows constructing Handles from asset paths in BSN assets by triggering loads during reflection.
+        // This should be removed when we have an upstream Construct implementation for Handle.
+        if ty.type_path().starts_with("bevy_asset::handle::Handle<") && self.asset_loader.is_some()
+        {
+            if let BsnValue::Prop(prop_value) = value {
+                if let BsnValue::String(asset_path) = prop_value.as_ref() {
+                    let Some(reflect_handle_load) = self
+                        .registry
+                        .get_type_data::<ReflectHandleLoad>(ty.type_id())
+                    else {
+                        return Err(ReflectError::MissingTypeData(
+                            "ReflectHandleLoad".into(),
+                            ty.type_path().into(),
+                        ));
+                    };
+                    let handle =
+                        reflect_handle_load.load(asset_path, self.asset_loader.as_ref().unwrap());
+                    return Ok(ReflectedValue {
+                        type_id: handle.reflect_type_info().type_id(),
+                        instance: handle.into_partial_reflect(),
+                    });
+                }
+            }
+        }
+
+        // This is fine : )
+        let is_construct_prop = ty
+            .type_path()
+            .starts_with("bevy_proto_bsn::construct::ConstructProp<");
+
+        let outer_ty = ty;
+        let ty = if !is_construct_prop {
+            ty
+        } else {
+            // Use the inner type of the ConstructProp
+            let generic = ty.generics().get_named("T").unwrap();
+            let construct_type = self.registry.get(generic.type_id()).unwrap();
+            construct_type.type_info()
+        };
+
         let type_id = ty.type_id();
-        match value {
+        let reflected_value = match value {
             BsnValue::UnknownExpr(expr) => Err(ReflectError::ExpressionNotSupported(expr.into())),
+            BsnValue::StructPatch(_, bsn_struct) => todo!(),
+            BsnValue::EnumPatch(_, bsn_enum) => todo!(),
+            BsnValue::Prop(bsn_value) => {
+                let props_type = self.try_resolve_props_type(ty.type_id())?;
+                self.reflect_value(bsn_value, &props_type.type_info(), skipped_fields)
+            }
             BsnValue::Bool(b) if type_id == TypeId::of::<bool>() => {
                 Ok(ReflectedValue::new(type_id, Box::new(*b)))
             }
@@ -464,30 +518,31 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
             }
             BsnValue::Number(number) => self.reflect_number(number, ty),
             BsnValue::Path(path) => self.reflect_path(path, Some(ty)),
-            BsnValue::StructLike(path, fields) => self.reflect_struct_like(
-                path,
-                fields,
-                |value, ty, skipped_fields| {
-                    Ok(self.reflect_value(value, ty, skipped_fields)?.instance)
-                },
-                ty,
-                skipped_fields,
-            ),
-            BsnValue::Call(path, args) => self.reflect_call_like(
-                path,
-                args.iter().collect::<Vec<_>>().as_ref(),
-                |value, ty, skipped_fields| {
-                    Ok(self.reflect_value(value, ty, skipped_fields)?.instance)
-                },
-                ty,
-                skipped_fields,
-            ),
+            BsnValue::NamedStruct(path, fields) => {
+                self.reflect_struct_like(Some(path), fields, ty, skipped_fields)
+            }
+            BsnValue::Call(path, args) => {
+                self.reflect_call_like(path, args.iter().collect::<Vec<_>>(), ty, skipped_fields)
+            }
             BsnValue::Tuple(items) => self.reflect_tuple(items, ty, skipped_fields),
-            _ => Err(ReflectError::UnexpectedType(
-                format!("{:?}", value),
-                ty.type_path().into(),
-            )),
+        }?;
+
+        if is_construct_prop {
+            let mut dynamic_tuple = DynamicTuple::default();
+            dynamic_tuple.insert_boxed(reflected_value.instance.into_partial_reflect());
+            let instance = Box::new(DynamicEnum::new(
+                if matches!(value, BsnValue::Prop(_)) {
+                    "Props"
+                } else {
+                    "Value"
+                },
+                DynamicVariant::Tuple(dynamic_tuple),
+            ));
+
+            return Ok(ReflectedValue::new(outer_ty.type_id(), instance));
         }
+
+        Ok(reflected_value)
     }
 
     fn reflect_number(&self, number: &str, ty: &TypeInfo) -> ReflectResult<ReflectedValue> {
@@ -591,17 +646,13 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         }
     }
 
-    fn reflect_struct_like<T, F>(
+    fn reflect_struct_like(
         &self,
-        path: &str,
-        fields: &[(String, T)],
-        get_value: F,
+        maybe_path: Option<&String>,
+        fields: &[(String, BsnValue)],
         ty: &TypeInfo,
         skipped_fields: &mut Vec<ReflectError>,
-    ) -> ReflectResult<ReflectedValue>
-    where
-        F: Fn(&T, &TypeInfo, &mut Vec<ReflectError>) -> ReflectResult<Box<dyn PartialReflect>>,
-    {
+    ) -> ReflectResult<ReflectedValue> {
         trait StructInfoLike {
             fn field(&self, name: &str) -> Option<&NamedField>;
         }
@@ -618,15 +669,19 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
             }
         }
 
-        fn reflect_fields<T, F>(
+        fn reflect_fields<F>(
             ty: &TypeInfo,
             info: &impl StructInfoLike,
-            fields: &[(String, T)],
+            fields: &[(String, BsnValue)],
             get_value: F,
             skipped_fields: &mut Vec<ReflectError>,
         ) -> ReflectResult<DynamicStruct>
         where
-            F: Fn(&T, &TypeInfo, &mut Vec<ReflectError>) -> ReflectResult<Box<dyn PartialReflect>>,
+            F: Fn(
+                &BsnValue,
+                &TypeInfo,
+                &mut Vec<ReflectError>,
+            ) -> ReflectResult<Box<dyn PartialReflect>>,
         {
             let mut dynamic_struct = DynamicStruct::default();
 
@@ -654,11 +709,22 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         }
 
         let dynamic: Box<dyn PartialReflect> = match ty {
-            TypeInfo::Struct(info) => {
-                Box::new(reflect_fields(ty, info, fields, get_value, skipped_fields)?)
-            }
+            TypeInfo::Struct(info) => Box::new(reflect_fields(
+                ty,
+                info,
+                fields,
+                |val, ty, skipped_fields| Ok(self.reflect_value(val, ty, skipped_fields)?.instance),
+                skipped_fields,
+            )?),
             TypeInfo::Enum(info) => {
                 // Enum (struct-like)
+                let Some(path) = maybe_path else {
+                    return Err(ReflectError::UnknownEnumVariant(
+                        "".into(),
+                        ty.type_path().into(),
+                    ));
+                };
+
                 let variant_name = path.split("::").last().unwrap();
                 let Some(struct_info) = info
                     .variant(variant_name)
@@ -669,8 +735,15 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
                         ty.type_path().into(),
                     ));
                 };
-                let dynamic_struct =
-                    reflect_fields(ty, struct_info, fields, get_value, skipped_fields)?;
+                let dynamic_struct = reflect_fields(
+                    ty,
+                    struct_info,
+                    fields,
+                    |val, ty, skipped_fields| {
+                        Ok(self.reflect_value(val, ty, skipped_fields)?.instance)
+                    },
+                    skipped_fields,
+                )?;
                 Box::new(DynamicEnum::new(
                     variant_name,
                     DynamicVariant::Struct(dynamic_struct),
@@ -684,17 +757,13 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         Ok(ReflectedValue::new(ty.type_id(), dynamic))
     }
 
-    fn reflect_call_like<T, F>(
+    fn reflect_call_like(
         &self,
         path: &str,
-        args: &[T],
-        get_value: F,
+        args: Vec<&BsnValue>,
         ty: &TypeInfo,
         skipped_fields: &mut Vec<ReflectError>,
-    ) -> ReflectResult<ReflectedValue>
-    where
-        F: Fn(&T, &TypeInfo, &mut Vec<ReflectError>) -> ReflectResult<Box<dyn PartialReflect>>,
-    {
+    ) -> ReflectResult<ReflectedValue> {
         match ty.kind() {
             ReflectKind::TupleStruct => {
                 // Tuple struct
@@ -710,15 +779,17 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
                         continue;
                     };
 
-                    let val = match get_value(value, field.type_info().unwrap(), skipped_fields) {
-                        Ok(val) => val,
-                        Err(e) => {
-                            skipped_fields.push(e);
-                            continue;
-                        }
-                    };
+                    let val =
+                        match self.reflect_value(value, field.type_info().unwrap(), skipped_fields)
+                        {
+                            Ok(val) => val,
+                            Err(e) => {
+                                skipped_fields.push(e);
+                                continue;
+                            }
+                        };
 
-                    dynamic_struct.insert_boxed(val);
+                    dynamic_struct.insert_boxed(val.instance);
                 }
 
                 Ok(ReflectedValue::new(ty.type_id(), Box::new(dynamic_struct)))
@@ -751,15 +822,16 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
                         continue;
                     };
 
-                    let val = match get_value(arg, field.type_info().unwrap(), skipped_fields) {
-                        Ok(val) => val,
-                        Err(e) => {
-                            skipped_fields.push(e);
-                            continue;
-                        }
-                    };
+                    let val =
+                        match self.reflect_value(arg, field.type_info().unwrap(), skipped_fields) {
+                            Ok(val) => val,
+                            Err(e) => {
+                                skipped_fields.push(e);
+                                continue;
+                            }
+                        };
 
-                    dynamic_tuple.insert_boxed(val);
+                    dynamic_tuple.insert_boxed(val.instance);
                 }
 
                 Ok(ReflectedValue::new(
