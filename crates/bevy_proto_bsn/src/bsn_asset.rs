@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use bevy_proto_bsn_ast::{
     quote::ToTokens,
-    syn::{Expr, ExprCall, ExprLit, ExprStruct, ExprUnary, Lit, Member, UnOp},
+    syn::{Block, Expr, ExprBlock, ExprCall, ExprLit, ExprStruct, ExprUnary, Lit, Member, UnOp},
     *,
 };
 
@@ -92,50 +92,36 @@ pub enum BsnKey {
 /// A non type-aware representation of a BSN component.
 #[derive(Debug, Clone, Hash)]
 pub enum BsnComponent {
-    /// A component patch with a type-path for the component.
-    ///
-    /// Has optional struct-like `{ ... }` or tuple-like props `( ... )`.
-    Patch(String, BsnProps),
-    /// A braced `{ ... }` unknown expression.
+    /// A struct patch.
+    StructPatch(String, BsnStruct),
+    /// An enum patch.
+    EnumPatch(String, BsnEnum),
+    /// A typed expression prefixed with its type path followed by `@`.
+    TypedExpr(String, String),
+    /// An expression without braces
+    InferredExpr(String),
+    /// A braced `{ ... }` expression.
     BracedExpr(String),
 }
 
-/// A non type-aware representation of BSN component patch props.
-#[derive(Default, Debug, Clone, Hash)]
-pub enum BsnProps {
-    /// No props to patch.
-    #[default]
-    None,
-    /// Struct-like props. Meaning the target is either a struct or an enum with named fields.
-    StructLike(Vec<(String, BsnProp)>),
-    /// Tuple-like props. Meaning the target is a tuple struct, tuple enum, or a function/method call.
-    TupleLike(Vec<BsnProp>),
-}
-
-/// A non type-aware representation of a construct prop for a BSN component patch field.
+/// A non type-aware representation of a BSN struct.
 #[derive(Debug, Clone, Hash)]
-pub enum BsnProp {
-    /// A value with no leading `@`.
-    Value(BsnValue),
-    /// A value with a leading `@`, indicating it needs construction.
-    Props(BsnValue),
+pub enum BsnStruct {
+    /// No fields specified
+    Unit,
+    /// Named fields
+    Named(Vec<(String, BsnValue)>),
+    /// Tuple-like fields
+    TupleLike(Vec<BsnValue>),
 }
 
-impl BsnProp {
-    /// Returns the value of the prop.
-    pub fn value(&self) -> &BsnValue {
-        match self {
-            BsnProp::Props(value) | BsnProp::Value(value) => value,
-        }
-    }
-
-    /// Returns the variant name of the prop.
-    pub fn variant_name(&self) -> &'static str {
-        match self {
-            BsnProp::Value(_) => "Value",
-            BsnProp::Props(_) => "Props",
-        }
-    }
+/// A non type-aware representation of a BSN enum.
+#[derive(Debug, Clone, Hash)]
+pub struct BsnEnum {
+    /// Enum variant
+    variant: String,
+    /// Variant fields as a struct patch
+    struct_patch: BsnStruct,
 }
 
 /// A value in a BSN tree.
@@ -149,16 +135,22 @@ pub enum BsnValue {
     String(String),
     /// A literal character
     Char(char),
-    /// A path or ident. Could be a unit struct, unit enum variant, etc.
+    /// A path or ident. Could be a non-patch unit struct/enum variant, or a constant/local ident.
     Path(String),
-    /// A struct or enum with named fields.
-    StructLike(String, Vec<(String, BsnValue)>),
-    /// A tuple struct, tuple enum, or function/method call.
+    /// A struct patch with optional path if named fields.
+    StructPatch(Option<String>, BsnStruct),
+    /// An enum patch consisting of its type path, variant and struct patch.
+    EnumPatch(String, BsnEnum),
+    /// A named struct (not in a patch context).
+    NamedStruct(String, Vec<(String, BsnValue)>),
+    /// A call-like expression (not in a patch context). Could be a tuple struct, a tuple-like enum variant, or a function/method call.
     Call(String, Vec<BsnValue>),
     /// A tuple of values.
     Tuple(Vec<BsnValue>),
     /// A list of values.
     List(Vec<BsnValue>),
+    /// Prop value
+    Prop(Box<BsnValue>),
     /// An unknown expression.
     UnknownExpr(String),
 }
@@ -207,44 +199,104 @@ impl BsnComponent {
 
     fn convert_components(components: &mut Vec<BsnComponent>, patch: &BsnAstPatch) {
         match patch {
-            BsnAstPatch::Tuple(patches) => {
+            BsnAstPatch::StructPatch(path, struct_patch) => {
+                let path = path.to_compact_string();
+                components.push(BsnComponent::StructPatch(path, struct_patch.into()));
+            }
+            BsnAstPatch::EnumPatch(path, enum_patch) => {
+                let path = path.to_compact_string();
+                components.push(BsnComponent::EnumPatch(path, enum_patch.into()));
+            }
+            BsnAstPatch::TypedExpr(path, _, expr) => {
+                components.push(BsnComponent::TypedExpr(
+                    path.to_compact_string(),
+                    expr.to_token_stream().to_string(),
+                ));
+            }
+            BsnAstPatch::InferredExpr(expr) => {
+                components.push(BsnComponent::InferredExpr(
+                    expr.to_token_stream().to_string(),
+                ));
+            }
+            BsnAstPatch::BracedInferredExpr(block) => {
+                components.push(BsnComponent::BracedExpr(
+                    block.to_token_stream().to_string(),
+                ));
+            }
+            BsnAstPatch::Tuple(_, patches) => {
                 for patch in patches {
                     Self::convert_components(components, patch);
                 }
-            }
-            BsnAstPatch::Patch(path, fields) => {
-                let path = path.to_compact_string();
-
-                let props = if fields.is_empty() {
-                    BsnProps::None
-                } else if matches!(fields[0].0, Member::Unnamed(_)) {
-                    BsnProps::TupleLike(fields.iter().map(|(_, prop)| prop.into()).collect())
-                } else {
-                    BsnProps::StructLike(
-                        fields
-                            .iter()
-                            .map(|(name, prop)| match name {
-                                Member::Named(name) => (name.to_string(), prop.into()),
-                                _ => unreachable!(),
-                            })
-                            .collect(),
-                    )
-                };
-
-                components.push(BsnComponent::Patch(path, props));
-            }
-            BsnAstPatch::Expr(expr) => {
-                components.push(BsnComponent::BracedExpr(expr.to_token_stream().to_string()));
             }
         }
     }
 }
 
-impl From<&BsnAstProp> for BsnProp {
+// impl From<&BsnAstProp> for BsnProp {
+//     fn from(prop: &BsnAstProp) -> Self {
+//         match prop {
+//             BsnAstProp::Value(value) => BsnProp::Value(value.into()),
+//             BsnAstProp::Props(value) => BsnProp::Props(value.into()),
+//         }
+//     }
+// }
+
+impl From<&BsnAstStruct> for BsnStruct {
+    fn from(struct_patch: &BsnAstStruct) -> Self {
+        match struct_patch {
+            BsnAstStruct::Unit => BsnStruct::Unit,
+            BsnAstStruct::Named(_, fields) => BsnStruct::Named(
+                fields
+                    .iter()
+                    .map(|field| (field.name.to_string(), BsnValue::from(&field.value)))
+                    .collect(),
+            ),
+            BsnAstStruct::TupleLike(_, fields) => BsnStruct::TupleLike(
+                fields
+                    .iter()
+                    .map(|field| BsnValue::from(&field.value))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl From<&BsnAstEnum> for BsnEnum {
+    fn from(struct_patch: &BsnAstEnum) -> Self {
+        BsnEnum {
+            variant: struct_patch.variant.to_string(),
+            struct_patch: BsnStruct::from(&struct_patch.struct_patch),
+        }
+    }
+}
+
+impl From<&BsnAstProp> for BsnValue {
     fn from(prop: &BsnAstProp) -> Self {
         match prop {
-            BsnAstProp::Value(value) => BsnProp::Value(value.into()),
-            BsnAstProp::Props(value) => BsnProp::Props(value.into()),
+            BsnAstProp::Value(value) => value.into(),
+            BsnAstProp::Props(value) => BsnValue::Prop(Box::new(value.into())),
+        }
+    }
+}
+
+impl From<&BsnAstValue> for BsnValue {
+    fn from(ast_value: &BsnAstValue) -> Self {
+        match ast_value {
+            BsnAstValue::StructPatch(maybe_path, struct_patch) => {
+                let path = maybe_path.as_ref().map(ToTokensExt::to_compact_string);
+                BsnValue::StructPatch(path, BsnStruct::from(struct_patch))
+            }
+            BsnAstValue::EnumPatch(path, enum_patch) => {
+                let path = path.to_compact_string();
+                BsnValue::EnumPatch(path, BsnEnum::from(enum_patch))
+            }
+            BsnAstValue::Expr(expr) => expr.into(),
+            BsnAstValue::BracedExpr(block) => (&Expr::Block(ExprBlock {
+                block: block.clone(),
+                attrs: vec![],
+                label: None,
+            }))
+                .into(),
         }
     }
 }
@@ -274,6 +326,12 @@ impl From<&Expr> for BsnValue {
     }
 }
 
+impl From<&Block> for BsnValue {
+    fn from(block: &Block) -> Self {
+        BsnValue::UnknownExpr(block.to_token_stream().to_string())
+    }
+}
+
 impl From<&ExprLit> for BsnValue {
     fn from(lit: &ExprLit) -> Self {
         match &lit.lit {
@@ -298,7 +356,7 @@ impl From<&ExprStruct> for BsnValue {
                 _ => unreachable!(),
             })
             .collect();
-        BsnValue::StructLike(path, fields)
+        BsnValue::NamedStruct(path, fields)
     }
 }
 
@@ -413,22 +471,33 @@ impl ToBsnString for BsnKey {
 impl ToBsnString for BsnComponent {
     fn to_bsn_string(&self) -> String {
         match self {
-            BsnComponent::Patch(path, props) => match props {
-                BsnProps::None => path.clone(),
-                BsnProps::StructLike(fields) => format!("{} {{ {} }}", path, fields.joined(", ")),
-                BsnProps::TupleLike(fields) => format!("{}({})", path, fields.joined(", ")),
+            BsnComponent::StructPatch(path, struct_patch) => match struct_patch {
+                BsnStruct::Unit => path.clone(),
+                BsnStruct::Named(_) => format!("{} {}", path, struct_patch.to_bsn_string()),
+                BsnStruct::TupleLike(_) => format!("{}{}", path, struct_patch.to_bsn_string()),
             },
-            BsnComponent::BracedExpr(expr) => expr.clone(),
+            BsnComponent::EnumPatch(path, enum_patch) => {
+                format!("{}::{}", path, enum_patch.to_bsn_string())
+            }
+            BsnComponent::TypedExpr(path, expr) => format!("{}@{}", path, expr),
+            BsnComponent::InferredExpr(expr) | BsnComponent::BracedExpr(expr) => expr.clone(),
         }
     }
 }
 
-impl ToBsnString for BsnProp {
+impl ToBsnString for BsnStruct {
     fn to_bsn_string(&self) -> String {
         match self {
-            BsnProp::Value(value) => value.to_bsn_string(),
-            BsnProp::Props(value) => format!("@{}", value.to_bsn_string()),
+            BsnStruct::Unit => "".to_string(),
+            BsnStruct::Named(fields) => format!("{{ {} }}", fields.joined(", ")),
+            BsnStruct::TupleLike(fields) => format!("({})", fields.joined(", ")),
         }
+    }
+}
+
+impl ToBsnString for BsnEnum {
+    fn to_bsn_string(&self) -> String {
+        format!("{} {}", self.variant, self.struct_patch.to_bsn_string())
     }
 }
 
@@ -440,12 +509,32 @@ impl ToBsnString for BsnValue {
             BsnValue::String(s) => format!("\"{}\"", s),
             BsnValue::Char(c) => format!("'{}'", c),
             BsnValue::Path(p) => p.clone(),
-            BsnValue::StructLike(path, fields) => {
+            BsnValue::StructPatch(path, struct_patch) => match struct_patch {
+                BsnStruct::Unit => panic!("Unit struct in non top-level patch context"),
+                BsnStruct::Named(_) => format!(
+                    "{}{}",
+                    path.as_ref()
+                        .map(|path| format!("{} ", path))
+                        .unwrap_or_else(|| "".to_string()),
+                    struct_patch.to_bsn_string()
+                ),
+                BsnStruct::TupleLike(_) => format!(
+                    "{}{}",
+                    path.as_ref()
+                        .expect("Tuple-like struct patches must have a type path"),
+                    struct_patch.to_bsn_string()
+                ),
+            },
+            BsnValue::EnumPatch(path, enum_patch) => {
+                format!("{}::{}", path, enum_patch.to_bsn_string())
+            }
+            BsnValue::NamedStruct(path, fields) => {
                 format!("{} {{ {} }}", path, fields.joined(", "))
             }
             BsnValue::Call(path, args) => {
                 format!("{}({})", path, args.joined(", "))
             }
+            BsnValue::Prop(value) => format!("@{}", value.to_bsn_string()),
             BsnValue::Tuple(fields) => format!("({})", fields.joined(", ")),
             BsnValue::List(values) => format!("[{}]", values.joined(", ")),
             BsnValue::UnknownExpr(expr) => expr.clone(),

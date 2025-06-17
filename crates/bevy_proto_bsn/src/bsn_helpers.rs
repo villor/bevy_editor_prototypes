@@ -7,11 +7,12 @@ use bevy::{
         bundle::Bundle,
         component::{Component, HookContext},
         entity::Entity,
+        error,
         event::Event,
         hierarchy::ChildOf,
         observer::Observer,
         system::IntoObserverSystem,
-        world::DeferredWorld,
+        world::{DeferredWorld, EntityWorldMut},
     },
     ui::{UiRect, Val},
 };
@@ -97,8 +98,12 @@ where
 }
 
 fn remove_callback(mut world: DeferredWorld, context: HookContext) {
-    let mut commands = world.commands();
-    commands.entity(context.entity).remove::<Observer>();
+    world.commands().entity(context.entity).queue_handled(
+        |mut entity: EntityWorldMut| {
+            entity.remove::<Observer>();
+        },
+        error::ignore,
+    );
 }
 
 /// Props for constructing observers in bsn-macros. See [`On`].

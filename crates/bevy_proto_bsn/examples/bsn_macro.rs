@@ -23,7 +23,11 @@ fn ui() -> impl Scene {
             flex_direction: FlexDirection::Column,
             row_gap: px(5.0),
         } [
-            (Node, {Name::new("BasicButton")}, :button("Basic")),
+            Transform {
+                translation: { x: 5.9 },
+            },
+            Visibility,
+            (Node, Name::new("BasicButton"), :button("Basic")),
             (Node, :button("Rounded"), rounded),
             (Node { border: px_all(5.0) }, BorderColor(RED_500) :button("Thick red"), rounded),
             (Node, :button("Merged children"), rounded) [(
@@ -32,7 +36,7 @@ fn ui() -> impl Scene {
                     height: px(30.0),
                 },
                 BackgroundColor(BLUE_500),
-                {BorderRadius::MAX}
+                {BorderRadius::MAX},
             )],
 
             (:button("Click me!")) [
@@ -62,12 +66,12 @@ fn button(text: &'static str) -> impl Scene {
         BorderColor(LIME_800),
         BackgroundColor(LIME_500)
     ) [
-        ({Text::new(text)}, ConstructTextFont { font: @"Inter-Regular.ttf" })
+        (Text::new(text), ConstructTextFont { font: @"Inter-Regular.ttf" })
     ]}
 }
 
 fn rounded() -> impl Scene {
     pbsn! {(
-        {BorderRadius::all(px(10.0))}
+        BorderRadius::all(px(10.0))
     )}
 }
