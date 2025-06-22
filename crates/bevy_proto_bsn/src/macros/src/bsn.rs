@@ -49,16 +49,11 @@ where
 
 impl ToTokensInternal for BsnAst {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let mut entity_index = 0;
-        bsn_ast_entity_to_tokens(tokens, &self.root, &mut entity_index);
+        bsn_ast_entity_to_tokens(tokens, &self.root);
     }
 }
 
-fn bsn_ast_entity_to_tokens(
-    tokens: &mut TokenStream,
-    entity: &BsnAstEntity,
-    entity_index: &mut usize,
-) {
+fn bsn_ast_entity_to_tokens(tokens: &mut TokenStream, entity: &BsnAstEntity) {
     let bevy_proto_bsn = bevy_proto_bsn_path();
     let patch = &entity.patch.to_token_stream();
     let inherits = entity
@@ -66,12 +61,9 @@ fn bsn_ast_entity_to_tokens(
         .iter()
         .map(ToTokensInternal::to_token_stream);
 
-    let _my_entity_index = *entity_index;
-    *entity_index += 1;
-
     let children = entity.children.iter().map(|c| {
         let mut tokens = TokenStream::new();
-        bsn_ast_child_to_tokens(&mut tokens, c, entity_index);
+        bsn_ast_child_to_tokens(&mut tokens, c);
         tokens
     });
 
@@ -89,13 +81,9 @@ fn bsn_ast_entity_to_tokens(
     output.to_tokens(tokens);
 }
 
-fn bsn_ast_child_to_tokens(
-    tokens: &mut TokenStream,
-    child: &BsnAstChild,
-    entity_index: &mut usize,
-) {
+fn bsn_ast_child_to_tokens(tokens: &mut TokenStream, child: &BsnAstChild) {
     match child {
-        BsnAstChild::Entity(entity) => bsn_ast_entity_to_tokens(tokens, entity, entity_index),
+        BsnAstChild::Entity(entity) => bsn_ast_entity_to_tokens(tokens, entity),
         BsnAstChild::Spread(expr) => expr.to_tokens(tokens),
     };
 }
