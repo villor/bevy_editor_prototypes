@@ -129,6 +129,7 @@ impl Parse for BsnAstEntity {
 }
 
 /// AST-representation of a single child item of a BSN entity.
+#[allow(clippy::large_enum_variant)]
 pub enum BsnAstChild {
     /// A child entity using the BSN syntax.
     Entity(BsnAstEntity),
