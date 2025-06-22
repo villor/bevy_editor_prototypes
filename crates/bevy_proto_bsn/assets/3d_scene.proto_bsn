@@ -1,4 +1,4 @@
-(Transform, Visibility::Inherited) [
+(Transform, Visibility) [
     (
         SceneRoot(@"alien.glb#Scene0"),
         RotateMe,
@@ -6,7 +6,7 @@
     (
         PointLight { shadows_enabled: true },
         Transform {
-            translation: Vec3 { x: 4.0, y: 8.0, z: 4.0 },
+            translation: { x: 4.0, y: 8.0, z: 4.0 },
         },
     ),
     Prefab(@"3d_scene_child.proto_bsn")

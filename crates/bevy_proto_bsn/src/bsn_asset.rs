@@ -119,9 +119,9 @@ pub enum BsnStruct {
 #[derive(Debug, Clone, Hash)]
 pub struct BsnEnum {
     /// Enum variant
-    variant: String,
+    pub variant: String,
     /// Variant fields as a struct patch
-    struct_patch: BsnStruct,
+    pub struct_patch: BsnStruct,
 }
 
 /// A value in a BSN tree.

@@ -17,7 +17,7 @@ use bevy::{
 use thiserror::Error;
 
 use crate::{
-    Bsn, BsnComponent, BsnEntity, BsnKey, BsnLoader, BsnLoaderError, BsnStruct, BsnValue,
+    Bsn, BsnComponent, BsnEntity, BsnEnum, BsnKey, BsnLoader, BsnLoaderError, BsnStruct, BsnValue,
     DynamicPatch, DynamicScene, ReflectConstruct,
 };
 
@@ -374,29 +374,14 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
                 let component_type = self.try_resolve_type(path)?;
                 let props_type = self.try_resolve_props_type(component_type.type_id())?;
 
-                let (props, skipped_fields) = match struct_patch {
-                    BsnStruct::Unit => (None, Vec::new()),
-                    BsnStruct::Named(fields) => {
-                        let mut skipped_fields = Vec::new();
-                        let props = self.reflect_struct_like(
-                            Some(path),
-                            fields,
-                            props_type.type_info(),
-                            &mut skipped_fields,
-                        )?;
-                        (Some(props), skipped_fields)
-                    }
-                    BsnStruct::TupleLike(fields) => {
-                        let mut skipped_fields = Vec::new();
-                        let props = self.reflect_call_like(
-                            path,
-                            fields.iter().collect::<Vec<_>>(),
-                            props_type.type_info(),
-                            &mut skipped_fields,
-                        )?;
-                        (Some(props), skipped_fields)
-                    }
-                };
+                let mut skipped_fields = Vec::new();
+
+                let props = self.reflect_bsn_struct(
+                    Some(path),
+                    props_type.type_info(),
+                    struct_patch,
+                    &mut skipped_fields,
+                )?;
 
                 Ok(ReflectedComponentPatch {
                     type_id: component_type.type_id(),
@@ -408,9 +393,19 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
                 let component_type = self.try_resolve_type(path)?;
                 let props_type = self.try_resolve_props_type(component_type.type_id())?;
 
-                // TODO: Ensure no variant works on the _component level_
+                let mut skipped_fields = Vec::new();
+                let props = self.reflect_enum_patch(
+                    path,
+                    props_type.type_info(),
+                    enum_patch,
+                    &mut skipped_fields,
+                )?;
 
-                todo!()
+                Ok(ReflectedComponentPatch {
+                    type_id: component_type.type_id(),
+                    props,
+                    skipped_fields,
+                })
             }
             BsnComponent::TypedExpr(path, expr) => Err(ReflectError::ExpressionNotSupported(
                 format!("{}@{}", path, expr),
@@ -425,29 +420,50 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         }
     }
 
-    fn reflect_component_props_patch(
+    fn reflect_enum_patch(
         &self,
-        path: &String,
+        path: &str,
+        ty: &TypeInfo,
+        enum_patch: &BsnEnum,
+        skipped_fields: &mut Vec<ReflectError>,
+    ) -> ReflectResult<Option<ReflectedValue>> {
+        if ty.kind() != ReflectKind::Enum {
+            return Err(ReflectError::UnexpectedType(
+                format!("Enum patch for non-enum type: {}", path),
+                ty.type_path().into(),
+            ));
+        }
+
+        let path_with_variant = format!("{}::{}", path, enum_patch.variant);
+        self.reflect_bsn_struct(
+            Some(&path_with_variant),
+            ty,
+            &enum_patch.struct_patch,
+            skipped_fields,
+        )
+    }
+
+    fn reflect_bsn_struct(
+        &self,
+        path: Option<&String>,
         ty: &TypeInfo,
         struct_patch: &BsnStruct,
-    ) -> ReflectResult<(Option<ReflectedValue>, Vec<ReflectError>)> {
+        skipped_fields: &mut Vec<ReflectError>,
+    ) -> ReflectResult<Option<ReflectedValue>> {
         Ok(match struct_patch {
-            BsnStruct::Unit => (None, Vec::new()),
+            BsnStruct::Unit => None,
             BsnStruct::Named(fields) => {
-                let mut skipped_fields = Vec::new();
-                let props =
-                    self.reflect_struct_like(Some(path), fields, ty, &mut skipped_fields)?;
-                (Some(props), skipped_fields)
+                let props = self.reflect_struct_like(path, fields, ty, skipped_fields)?;
+                Some(props)
             }
             BsnStruct::TupleLike(fields) => {
-                let mut skipped_fields = Vec::new();
                 let props = self.reflect_call_like(
-                    path,
+                    path.expect("Tuple-like struct should have a path"),
                     fields.iter().collect::<Vec<_>>(),
                     ty,
-                    &mut skipped_fields,
+                    skipped_fields,
                 )?;
-                (Some(props), skipped_fields)
+                Some(props)
             }
         })
     }
@@ -501,11 +517,29 @@ impl<'a, 'b> BsnReflector<'a, 'b> {
         let type_id = ty.type_id();
         let reflected_value = match value {
             BsnValue::UnknownExpr(expr) => Err(ReflectError::ExpressionNotSupported(expr.into())),
-            BsnValue::StructPatch(_, bsn_struct) => todo!(),
-            BsnValue::EnumPatch(_, bsn_enum) => todo!(),
+            BsnValue::StructPatch(path, bsn_struct) => self
+                .reflect_bsn_struct(path.as_ref(), ty, bsn_struct, skipped_fields)
+                .map(|v| {
+                    v.unwrap_or_else(|| {
+                        ReflectedValue::new(type_id, Box::new(DynamicStruct::default()))
+                    })
+                }),
+            BsnValue::EnumPatch(path, bsn_enum) => self
+                .reflect_enum_patch(path, ty, bsn_enum, skipped_fields)
+                .map(|v| {
+                    v.unwrap_or_else(|| {
+                        ReflectedValue::new(
+                            type_id,
+                            Box::new(DynamicEnum::new(
+                                bsn_enum.variant.as_str(),
+                                DynamicVariant::Unit,
+                            )),
+                        )
+                    })
+                }),
             BsnValue::Prop(bsn_value) => {
                 let props_type = self.try_resolve_props_type(ty.type_id())?;
-                self.reflect_value(bsn_value, &props_type.type_info(), skipped_fields)
+                self.reflect_value(bsn_value, props_type.type_info(), skipped_fields)
             }
             BsnValue::Bool(b) if type_id == TypeId::of::<bool>() => {
                 Ok(ReflectedValue::new(type_id, Box::new(*b)))

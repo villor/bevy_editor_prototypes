@@ -9,7 +9,7 @@ Node {
     Node { column_gap: Val::Px(35) } [
         (
             Text("Hello"),
-            TextColor(Color::Srgba(Srgba {
+            TextColor(Color::Srgba({
                 green: 0
             }))
         ),
