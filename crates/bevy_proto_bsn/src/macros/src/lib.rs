@@ -5,7 +5,7 @@ use proc_macro::TokenStream;
 mod bsn;
 mod derive_construct;
 
-/// Macro is used to author scenes using BSN syntax.
+/// Macro for authoring scenes and patches using BSN syntax. Outputs an [`bevy_proto_bsn::EntityPatch`].
 ///
 /// See the [BSN proposal](https://github.com/bevyengine/bevy/discussions/14437) for more information on the syntax.
 ///

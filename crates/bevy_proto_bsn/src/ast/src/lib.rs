@@ -163,13 +163,13 @@ pub enum BsnAstPatch {
     EnumPatch(ExprPath, BsnAstEnum),
     /// A type path followed by a single `@`-prefixed expression evaluating to props for the component to be constructed. E.g. `Component@"prop value"`
     ///
-    /// This can be used in cases where the type of the component is not inferable from the expression.
+    /// This can be used in cases where the type of the component can not be inferred from the expression.
     TypedExpr(ExprPath, Token![@], Expr),
     /// An unbraced expression, works for expressions that are not ambigous with any other patch variants.
     ///
     /// This is an inferred expression, meaning it only works for blanket construct types.
     InferredExpr(Expr),
-    /// A braced expression, allowing expressions that are ambigous with other patch variants.
+    /// A braced expression, allowing expressions that are ambigous with other patch syntax variants.
     ///
     /// This is an inferred expression, meaning it only works for blanket construct types.
     BracedInferredExpr(Block),

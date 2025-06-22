@@ -232,15 +232,6 @@ impl BsnComponent {
     }
 }
 
-// impl From<&BsnAstProp> for BsnProp {
-//     fn from(prop: &BsnAstProp) -> Self {
-//         match prop {
-//             BsnAstProp::Value(value) => BsnProp::Value(value.into()),
-//             BsnAstProp::Props(value) => BsnProp::Props(value.into()),
-//         }
-//     }
-// }
-
 impl From<&BsnAstStruct> for BsnStruct {
     fn from(struct_patch: &BsnAstStruct) -> Self {
         match struct_patch {
