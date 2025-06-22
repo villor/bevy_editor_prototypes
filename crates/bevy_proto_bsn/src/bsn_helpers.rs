@@ -102,7 +102,7 @@ fn remove_callback(mut world: DeferredWorld, context: HookContext) {
         |mut entity: EntityWorldMut| {
             entity.remove::<Observer>();
         },
-        error::ignore,
+        error::error,
     );
 }
 
