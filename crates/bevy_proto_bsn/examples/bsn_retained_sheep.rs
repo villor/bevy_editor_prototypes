@@ -59,7 +59,7 @@ fn counter(num: usize, name: &'static str) -> impl Scene {
             (
                 Button,
                 Text("Increase"),
-                TextColor({css::GREEN}),
+                TextColor(css::GREEN),
                 visible_if(num < 100)
             ) [
                 // Observes parent entity.
@@ -71,7 +71,7 @@ fn counter(num: usize, name: &'static str) -> impl Scene {
                 Name::new("DecreaseButton"),
                 Button,
                 Text("Decrease"),
-                TextColor({css::RED}),
+                TextColor(css::RED),
                 visible_if(num > 0),
             ),
             // Observes named entity "DecreaseButton"

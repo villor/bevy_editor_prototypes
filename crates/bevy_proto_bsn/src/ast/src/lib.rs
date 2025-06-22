@@ -223,7 +223,6 @@ impl Parse for BsnAstPatch {
 }
 
 /// A struct patch.
-#[derive(Clone)]
 pub enum BsnAstStruct {
     /// A struct patch without fields.
     Unit,
@@ -234,7 +233,6 @@ pub enum BsnAstStruct {
 }
 
 /// Named prop field for a struct patch.
-#[derive(Clone)]
 pub struct BsnAstNamedField {
     /// Field name
     pub name: Ident,
@@ -245,7 +243,6 @@ pub struct BsnAstNamedField {
 }
 
 /// Unnamed prop field for a tuple-like patch.
-#[derive(Clone)]
 pub struct BsnAstTupleField {
     /// Index of the field
     pub index: Index,
@@ -299,7 +296,6 @@ impl Parse for BsnAstStruct {
 }
 
 /// An enum variant and its struct patch.
-#[derive(Clone)]
 pub struct BsnAstEnum {
     /// `::`-token between the type path and the variant
     pub variant_separator: Token![::],
@@ -323,7 +319,6 @@ impl BsnAstEnum {
 }
 
 /// AST for a BSN property.
-#[derive(Clone)]
 pub enum BsnAstProp {
     /// A value not prefixed with `@`, this may contain nested partial patches.
     Value(BsnAstValue),
@@ -345,7 +340,6 @@ impl Parse for BsnAstProp {
 }
 
 /// AST for a value in a BSN patch.
-#[derive(Clone)]
 pub enum BsnAstValue {
     /// A struct patch. Path is optional for non top-level structs with **named** fields. E.g. `Vec3 { .. }` or `{ ... }`
     StructPatch(Option<ExprPath>, BsnAstStruct),
@@ -430,7 +424,6 @@ fn last_is_capitalized(path: &Path) -> bool {
 }
 
 /// An inherited patch function path, with optional `,`-separated parameters surrounded by `()`.
-#[derive(Clone)]
 pub struct BsnAstInherit(pub Path, pub Punctuated<Expr, Token![,]>);
 
 impl Parse for BsnAstInherit {

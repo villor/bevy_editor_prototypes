@@ -36,7 +36,7 @@ fn ui() -> impl Scene {
                     height: px(30.0),
                 },
                 BackgroundColor(BLUE_500),
-                {BorderRadius::MAX},
+                BorderRadius::MAX,
             )],
 
             (:button("Click me!")) [

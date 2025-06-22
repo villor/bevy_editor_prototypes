@@ -3,6 +3,7 @@ use quote::{format_ident, quote, ToTokens};
 use syn::{
     parse2,
     punctuated::{Pair, Punctuated},
+    token::Comma,
     ExprPath, Ident, Member, Path, Token,
 };
 
@@ -61,11 +62,15 @@ fn bsn_ast_entity_to_tokens(tokens: &mut TokenStream, entity: &BsnAstEntity) {
         .iter()
         .map(ToTokensInternal::to_token_stream);
 
-    let children = entity.children.iter().map(|c| {
-        let mut tokens = TokenStream::new();
-        bsn_ast_child_to_tokens(&mut tokens, c);
-        tokens
-    });
+    let mut children = TokenStream::new();
+    for child in entity.children.pairs() {
+        bsn_ast_child_to_tokens(&mut children, child.into_value());
+        if let Some(punct) = child.punct() {
+            punct.to_tokens(&mut children);
+        } else {
+            Comma::default().to_tokens(&mut children);
+        }
+    }
 
     let key = entity.key.to_token_stream();
 
@@ -73,7 +78,7 @@ fn bsn_ast_entity_to_tokens(tokens: &mut TokenStream, entity: &BsnAstEntity) {
         #bevy_proto_bsn::EntityPatch {
             inherit: (#(#inherits,)*),
             patch: #patch,
-            children: (#(#children,)*),
+            children: (#children),
             key: #key
         }
     };
@@ -152,7 +157,10 @@ impl ToTokensInternal for BsnAstPatch {
             BsnAstPatch::BracedInferredExpr(block) => {
                 quote! {
                     #bevy_proto_bsn::ConstructPatch::new_inferred(move |mut __props| {
-                        *__props = #block;
+                        #[allow(unused_braces)]
+                        {
+                            *__props = #block;
+                        }
                     })
                 }
                 .to_tokens(tokens);
@@ -262,15 +270,26 @@ fn enum_to_assignments(
         _ => None,
     };
 
-    quote! {
-        if !matches!(#field_path, #enum_path { .. }) {
-            #deref_token #field_path = #enum_path #default_assignment;
+    if assignments.is_empty() {
+        quote! {
+            // NOTE: This branch also enables constants/static globals even though they look identical to enums, which is why we also call .into().
+            #deref_token #field_path = #enum_path #default_assignment.into();
         }
-        if let #enum_path #destructure = &mut #field_path {
-            #assignments
+        .to_tokens(tokens);
+    } else {
+        quote! {
+            match #field_path {
+            #enum_path { .. } => {},
+            _ => {
+                #deref_token #field_path = #enum_path #default_assignment;
+            },
+        };
+            if let #enum_path #destructure = &mut #field_path {
+                #assignments
+            }
         }
+        .to_tokens(tokens);
     }
-    .to_tokens(tokens);
 }
 
 fn prop_to_assignments(
@@ -302,7 +321,10 @@ fn prop_to_assignments(
             }
             BsnAstValue::BracedExpr(block) => {
                 quote! {
-                    #deref_token #field_path = #block.into();
+                    #[allow(unused_braces)]
+                    {
+                        #deref_token #field_path = #block.into();
+                    }
                 }
                 .to_tokens(tokens);
             }
